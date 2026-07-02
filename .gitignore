@@ -1,6 +1,3 @@
-# Local Claude Code project instructions — memuat detail cluster/prod, JANGAN dipublikasikan
-CLAUDE.md
-
 # Kubeconfig & credential — JANGAN pernah di-commit ke repo publik
 *.config
 *.kubeconfig
