@@ -15,7 +15,7 @@ per sesi ±1 jam.
 |---|---|---|---|
 | 0 | Baseline & orientasi (`get`/`describe`/`logs`/`events`, peta cluster) | — | ✅ |
 | 1 | Workload: Deployment, Service, rolling update, ImagePullBackOff | `deployment/`, `service/` | ✅ |
-| 2 | Konfigurasi: ConfigMap & Secret (env vs mount, base64 ≠ enkripsi, drill `CreateContainerConfigError`) | `configmap/`, `secret/`, `deployment/deployment-{configmap,secret}-*`, `pod/pod-with-{cm,secret}` | 🔄 Sesi 2a ✅ |
+| 2 | Konfigurasi: ConfigMap & Secret (env vs mount, base64 ≠ enkripsi, drill `CreateContainerConfigError`) | `configmap/`, `secret/`, `deployment/deployment-{configmap,secret}-*`, `pod/pod-with-{cm,secret}` | ✅ |
 | 3 | Storage: PVC/PV/StorageClass (pasang local-path-provisioner, bukti data persisten) | `pvc/`, `pod/pod-with-pvc` | ⬜ |
 | 4 | Health check & self-healing: ReplicaSet ownership, readiness vs liveness vs startup | `replicaset/`, `pod/pod-with-probe` | ⬜ |
 | 5 | Resource management: requests/limits, QoS, OOMKilled, LimitRange, ResourceQuota | `pod/pod-with-limit`, `limitrange/`, `resourcequota/` | ⬜ |
@@ -60,7 +60,7 @@ per sesi ±1 jam.
   `unauthorized`=registry privat · `toomanyrequests`=rate limit. `ErrImagePull`=gagal pull;
   `ImagePullBackOff`=sudah retry berulang dengan backoff (jeda makin lama).
 
-### 🔄 Modul 2 — Konfigurasi (ConfigMap & Secret)
+### ✅ Modul 2 — Konfigurasi (ConfigMap & Secret) — LULUS checkpoint
 
 **Sesi 2a ✅ — ConfigMap (env & file mount):**
 - **Reconciliation loop = konsep inti.** Apply Deployment *sebelum* ConfigMap-nya ada:
@@ -91,15 +91,41 @@ per sesi ±1 jam.
   tanpa kutip; `exec` ke Pod yang salah saat verifikasi; env `APP_VERSION=1.25` padahal
   container 1.26 — config bisa menyimpang diam-diam dari realita.
 
-**⏭️ Berikutnya — Sesi 2b: Secret** (`data` vs `stringData`, base64 ≠ enkripsi, mount
-credential file, drill `deployment-secret-1` yang mereferensikan Secret yang tidak ada).
-Warm-up ulang: jawab dulu — di `demo-app`, kenapa `ls /usr/share/nginx/html` hanya
-menampilkan `index.html` tanpa `50x.html`? (Belum sempat diverifikasi di sesi 2a.)
-Keadaan cluster saat ini: Deployment `nginx-demo` (5 replika, nginx:1.26, envFrom aktif),
-Pod `demo-app` + Service NodePort `demo-app`, Deployment `web` (sisa Modul 1) — bersihkan
-`nginx-demo` sebelum apply workload `nginx-demo` lain.
-(Catatan silabus: Storage/PVC jadi Modul 3 — cluster belum punya StorageClass, itu bagian
-pelajarannya.)
+**Sesi 2b ✅ — Secret (+ checkpoint Modul 2 LULUS):**
+- **Mount shadowing** (PR dari 2a): volume mount **menutupi** isi direktori asal (analogi
+  USB drive) — `50x.html` tidak dihapus, cuma tertutup mount point. Solusi tambah-satu-file:
+  `subPath` — tapi file subPath **tidak ikut live-update** saat ConfigMap berubah (trade-off).
+- **base64 = encoding, bukan enkripsi** — dibongkar 3 lapis: (1) `base64 -d` sedetik;
+  (2) `stringData` vs `data` tersimpan identik di cluster; (3) plaintext malah bocor utuh di
+  annotation `last-applied-configuration`. Yang membatasi akses Secret itu **RBAC**, bukan
+  `kind`-nya; plus at-rest encryption di etcd (RKE2: default on) & mount via tmpfs.
+  Jangan pernah commit Secret bernilai asli ke git.
+- **Secret di container selalu sudah ter-decode** (env maupun file mount) — base64 cuma
+  kemasan transportasi di lapisan API.
+- **Pod itu (hampir) immutable** — apply perubahan volumes/env ke bare Pod ditolak
+  (`Forbidden`); hanya `image` dkk yang boleh. "Perubahan" di k8s = **penggantian** Pod;
+  Deployment kelihatan mutable karena controller yang mengganti Pod untukmu. Bare Pod =
+  kamu controller manualnya (delete + apply).
+- **Insiden label-selector** (dialami langsung): Pod `demo-app` baru tanpa label → Service
+  endpoints kosong → `curl: connection reset` **padahal semua komponen "sehat"**. Refleks:
+  `kubectl get endpoints` (deprecated v1.33+ → `get endpointslices`). Tiket insiden paling
+  umum se-k8s.
+- **DRILL #1 LULUS:** `deployment-secret-1` → `CreateContainerConfigError` → akar: referensi
+  Secret `app-secret` tidak ada → fix: buat `secret/app-secret.yaml` (Solusi B, blast radius
+  kecil vs Solusi A ubah referensi). Pelajaran incident: gejala ≠ akar masalah (gejala =
+  status yang terlihat); **perubahan minimal saat fix insiden** (jangan sekalian ganti
+  env→envFrom); `logs` kosong untuk container yang tak pernah start — `describe`/Events dulu.
+
+**⏭️ Berikutnya — Modul 3: Storage (PVC/PV/StorageClass).** Apply `pvc/pvc.yaml` → bakal
+**Pending** (cluster tanpa StorageClass — disengaja jadi pelajaran) → pasang
+local-path-provisioner → bukti data selamat dari kematian Pod.
+Soal pembuka sesi: `deployment-secret-1` (nginx-deploy) ternyata pakai label `app: nginx` —
+**sama dengan Deployment nginx-demo**. Apa akibatnya untuk Service ber-selector `app: nginx`?
+Cek: `kubectl get pods -n learning --show-labels` dan `service/service.yaml`.
+Keadaan cluster: Deployment `nginx-demo` (5×1.26) + `nginx-deploy` (3×1.25, envFrom Secret)
++ `web` (3×1.27), bare Pod `demo-app` (varian Secret, TANPA label — Service `demo-app`
+endpoints kosong/dangling), Secret `app-secret{,-1,-2}`, ConfigMap `app-config-{1,2}`.
+Pembersihan layak jadi pemanasan Modul 3.
 
 ## Cara melanjutkan di perangkat lain
 1. `git pull` repo ini — skill tutor + silabus ikut terbawa (`.claude/skills/k8s-belajar/`).
