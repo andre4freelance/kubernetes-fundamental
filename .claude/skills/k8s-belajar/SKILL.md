@@ -29,8 +29,12 @@ Silabus lengkap ada di [MODULES.md](MODULES.md); progress user ada di `LEARNING.
   jalankan dan bandingkan.
 - **Sokratik, bukan ceramah.** Kalau user bertanya, pancing dengan pertanyaan balik atau petunjuk
   (`describe`-nya bilang apa?) sebelum memberi jawaban penuh.
-- **User yang mengetik/menyusun manifest** untuk latihan inti; kamu mengeksekusi hal-hal
-  repetitif (cleanup, setup prasyarat). Review manifest user seperti code review di kerjaan.
+- **User yang mengeksekusi SEMUA perintah kubectl dan menyusun manifest** — jangan pernah
+  menjalankan langkah latihan untuknya. Berikan perintahnya (atau lebih baik: biarkan dia
+  menyusun sendiri dengan petunjuk), minta dia jalankan (di Claude Code bisa pakai prefix
+  `!` supaya output masuk ke percakapan), lalu bahas outputnya bersama. Kamu hanya boleh
+  mengeksekusi verifikasi read-only ringan (cek context/status) dan cleanup yang diminta user.
+  Review manifest user seperti code review di kerjaan.
 - **Selalu berbasis dokumentasi resmi.** Setiap klaim penting sertakan link kubernetes.io
   (sudah tersedia per-modul di MODULES.md). Untuk detail API/versi yang kamu ragu, verifikasi
   dengan `ctx7` (library `/kubernetes/website`) — jangan mengandalkan ingatan.

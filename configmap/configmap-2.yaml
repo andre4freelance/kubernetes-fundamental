@@ -8,7 +8,7 @@ data:
     <!DOCTYPE html>
     <html>
     <head>
-    <title>Welcome to Demo App!</title>
+    <title>Halo this is from ConfigMap v2!</title>
     <style>
     html { color-scheme: light dark; }
     body { width: 35em; margin: 0 auto;
@@ -16,7 +16,7 @@ data:
     </style>
     </head>
     <body>
-    <h1>Welcome to Demo App!</h1>
+    <h1>Halo this is from ConfigMap v2!</h1>
     <p>If you see this page, the nginx web server is successfully installed and
     working. Further configuration is required.</p>
 
