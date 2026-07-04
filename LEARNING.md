@@ -1,7 +1,27 @@
 # Kubernetes Learning — Progress & Recap
 
 Catatan belajar Kubernetes terstruktur, dipakai lintas perangkat (pull repo → buka Claude CLI
-→ lanjut dari sini). Panduan modul ada di skill `k8s-belajar`.
+→ lanjut dari sini). Panduan tutor + silabus detail ada di skill **`k8s-belajar`** yang ikut
+ter-commit di repo (`.claude/skills/k8s-belajar/`) — otomatis terdeteksi Claude Code di mesin
+mana pun.
+
+**Tujuan:** siap kerja DevOps/SRE. **Cakupan plan ini:** fundamental (seluruh resource repo
+ini) sampai lulus capstone Modul 8; topik lanjutan dibahas setelah itu. **Pace:** fleksibel,
+per sesi ±1 jam.
+
+## Silabus (detail: `.claude/skills/k8s-belajar/MODULES.md`)
+
+| Modul | Topik | File repo | Status |
+|---|---|---|---|
+| 0 | Baseline & orientasi (`get`/`describe`/`logs`/`events`, peta cluster) | — | ✅ |
+| 1 | Workload: Deployment, Service, rolling update, ImagePullBackOff | `deployment/`, `service/` | ✅ |
+| 2 | Konfigurasi: ConfigMap & Secret (env vs mount, base64 ≠ enkripsi, drill `CreateContainerConfigError`) | `configmap/`, `secret/`, `deployment/deployment-{configmap,secret}-*`, `pod/pod-with-{cm,secret}` | ⏭️ berikutnya |
+| 3 | Storage: PVC/PV/StorageClass (pasang local-path-provisioner, bukti data persisten) | `pvc/`, `pod/pod-with-pvc` | ⬜ |
+| 4 | Health check & self-healing: ReplicaSet ownership, readiness vs liveness vs startup | `replicaset/`, `pod/pod-with-probe` | ⬜ |
+| 5 | Resource management: requests/limits, QoS, OOMKilled, LimitRange, ResourceQuota | `pod/pod-with-limit`, `limitrange/`, `resourcequota/` | ⬜ |
+| 6 | Autoscaling: HPA + load test (metrics-server sudah ada di RKE2) | `hpa/` | ⬜ |
+| 7 | Expose: 3 tipe Service + Ingress host/path routing (ingress-nginx sudah ada) | `service/`, `ingress/` | ⬜ |
+| 8 | **Capstone:** deploy production-style dari nol + drill troubleshooting (ujian akhir) | `capstone/` (ditulis user) | ⬜ |
 
 ## Setup
 
@@ -40,10 +60,14 @@ Catatan belajar Kubernetes terstruktur, dipakai lintas perangkat (pull repo → 
   `unauthorized`=registry privat · `toomanyrequests`=rate limit. `ErrImagePull`=gagal pull;
   `ImagePullBackOff`=sudah retry berulang dengan backoff (jeda makin lama).
 
-### ⏭️ Berikutnya — Modul 2: Config & Storage
-ConfigMap (config non-rahasia), Secret (data sensitif), PVC (penyimpanan persisten).
+### ⏭️ Berikutnya — Modul 2: Konfigurasi (ConfigMap & Secret)
+Mulai dari Sesi 2a di `MODULES.md`: ConfigMap sebagai env vs file mount.
+(Storage/PVC dipindah jadi Modul 3 tersendiri — cluster belum punya StorageClass, itu jadi
+bagian pelajarannya.)
 
 ## Cara melanjutkan di perangkat lain
-1. `git pull` repo ini.
-2. Pastikan kubeconfig cluster `learning` tersedia di perangkat itu (context `local`).
-3. Buka Claude CLI, minta "lanjut belajar Kubernetes" — skill `k8s-belajar` + file ini jadi acuan.
+1. `git pull` repo ini — skill tutor + silabus ikut terbawa (`.claude/skills/k8s-belajar/`).
+2. Pastikan kubeconfig cluster `learning` tersedia di perangkat itu (context `local`);
+   path-nya per-mesin dan tidak disimpan di repo.
+3. Buka Claude Code di repo ini, minta **"lanjut belajar Kubernetes"** — skill `k8s-belajar`
+   terdeteksi otomatis, membaca file ini, dan melanjutkan dari checkpoint terakhir.

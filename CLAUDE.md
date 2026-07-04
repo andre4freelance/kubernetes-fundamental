@@ -48,4 +48,6 @@ Manifests declare **no `namespace`** — they land in whatever namespace is curr
 
 ## Learning progress
 
-See `LEARNING.md` for the structured learning log (portable across machines).
+See `LEARNING.md` for the syllabus + structured learning log (portable across machines).
+The tutor behavior and detailed module guide live in the committed project skill
+`.claude/skills/k8s-belajar/` — invoke it when the user asks to continue learning Kubernetes.
