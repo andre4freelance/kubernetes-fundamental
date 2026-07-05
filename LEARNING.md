@@ -16,7 +16,7 @@ per sesi ±1 jam.
 | 0 | Baseline & orientasi (`get`/`describe`/`logs`/`events`, peta cluster) | — | ✅ |
 | 1 | Workload: Deployment, Service, rolling update, ImagePullBackOff | `deployment/`, `service/` | ✅ |
 | 2 | Konfigurasi: ConfigMap & Secret (env vs mount, base64 ≠ enkripsi, drill `CreateContainerConfigError`) | `configmap/`, `secret/`, `deployment/deployment-{configmap,secret}-*`, `pod/pod-with-{cm,secret}` | ✅ |
-| 3 | Storage: PVC/PV/StorageClass (pasang local-path-provisioner, bukti data persisten) | `pvc/`, `pod/pod-with-pvc` | ⬜ |
+| 3 | Storage: PVC/PV/StorageClass (pasang local-path-provisioner, bukti data persisten) | `pvc/`, `pod/pod-with-pvc` | ✅ |
 | 4 | Health check & self-healing: ReplicaSet ownership, readiness vs liveness vs startup | `replicaset/`, `pod/pod-with-probe` | ⬜ |
 | 5 | Resource management: requests/limits, QoS, OOMKilled, LimitRange, ResourceQuota | `pod/pod-with-limit`, `limitrange/`, `resourcequota/` | ⬜ |
 | 6 | Autoscaling: HPA + load test (metrics-server sudah ada di RKE2) | `hpa/` | ⬜ |
@@ -116,16 +116,57 @@ per sesi ±1 jam.
   status yang terlihat); **perubahan minimal saat fix insiden** (jangan sekalian ganti
   env→envFrom); `logs` kosong untuk container yang tak pernah start — `describe`/Events dulu.
 
-**⏭️ Berikutnya — Modul 3: Storage (PVC/PV/StorageClass).** Apply `pvc/pvc.yaml` → bakal
-**Pending** (cluster tanpa StorageClass — disengaja jadi pelajaran) → pasang
-local-path-provisioner → bukti data selamat dari kematian Pod.
-Soal pembuka sesi: `deployment-secret-1` (nginx-deploy) ternyata pakai label `app: nginx` —
-**sama dengan Deployment nginx-demo**. Apa akibatnya untuk Service ber-selector `app: nginx`?
-Cek: `kubectl get pods -n learning --show-labels` dan `service/service.yaml`.
-Keadaan cluster: Deployment `nginx-demo` (5×1.26) + `nginx-deploy` (3×1.25, envFrom Secret)
-+ `web` (3×1.27), bare Pod `demo-app` (varian Secret, TANPA label — Service `demo-app`
-endpoints kosong/dangling), Secret `app-secret{,-1,-2}`, ConfigMap `app-config-{1,2}`.
-Pembersihan layak jadi pemanasan Modul 3.
+### ✅ Modul 3 — Storage (PVC/PV/StorageClass) — LULUS checkpoint
+
+**Pemanasan — tabrakan label & sifat objek:**
+- **Deployment & Service itu sejajar**, bukan hierarki. Dua relasi berbeda: *kepemilikan*
+  (vertikal, `ownerReferences`: Deployment→ReplicaSet→Pod — hapus induk, anak tersapu
+  = cascading deletion; `--cascade=orphan` menyisakan anak yatim) vs *selektor* (horizontal,
+  lewat label: Service→Pod, HPA→Deployment, Ingress→Service — putus satu, yang lain tetap
+  hidup jadi *dangling*). Dibuktikan: hapus 3 Deployment → semua Pod ikut mati, tapi Service
+  `demo-app`/`web` tetap ada karena tak dimiliki Deployment mana pun.
+- **Bahaya label kembar:** `nginx-demo` & `nginx-deploy` sama-sama `app=nginx` → satu Service
+  `selector: app=nginx` akan menyedot **8 Pod campur aduk** (beda image/config) → respons tak
+  konsisten walau semua "Running". Konvensi `app.kubernetes.io/{name,instance}` ada buat cegah ini.
+
+**Inti — 3 objek abstraksi & dynamic provisioning:**
+- **PV** (storage nyata, cluster-scoped) ← **PVC** (permintaan, *namespaced* — Pod cuma bisa
+  mount PVC senamespace) ← **StorageClass** (pabrik yang bikin PV otomatis, cluster-scoped).
+  Pod cuma kenal `claimName` PVC — tak pernah sebut Ceph/EBS/local-path. Itulah lapisan portable.
+- **Cluster ini RKE2 self-managed di VM GCP → tak ada StorageClass bawaan** (beda dg GKE yang
+  punya `standard-rwo` via CSI). Maka `pvc/pvc.yaml` → `Pending`. Events gamblang:
+  `no persistent volumes available ... and no storage class is set`. Diagnosa PVC = `describe`,
+  baca Events (refleks sama seperti ImagePullBackOff).
+- Pasang **local-path-provisioner** (disimpan ke `pvc/local-path-provisioner.yaml`). Dua kejutan:
+  (1) StorageClass `local-path` **bukan default** → PVC dengan `storageClassName` nil tetap
+  Pending (minta "default", tak ada yang default). Fix best-practice: sebut kelas **eksplisit**
+  `storageClassName: local-path` (explicit > implicit; `storageClassName` immutable → **delete +
+  recreate** PVC). (2) `volumeBindingMode: WaitForFirstConsumer` → PV **baru lahir saat Pod
+  pertama memakai** PVC (`waiting for first consumer`), bukan langsung.
+- **Persistensi dibuktikan:** tulis `bukti.txt` ke volume → `delete pod` → `apply` ulang → file
+  **selamat**, RESTARTS 0 (Pod benar-benar baru). Siklus hidup data ≠ siklus hidup Pod.
+- **Mekanisme node-lokal:** local-path **tidak** replikasi antar-node; data duduk di
+  `/opt/local-path-provisioner` di **satu** node. PV dipaku ke node itu via `nodeAffinity`
+  (`kubernetes.io/hostname In [rke-worker]`) → Pod baru **diseret balik** ke node yang sama.
+  Bukan data mengejar Pod; Pod-nya yang ditarik ke data. **Batasan:** node mati = data terkubur
+  → production butuh storage jaringan node-independent (Ceph/GCP PD via CSI/EBS).
+- **reclaimPolicy `Delete`** (bawaan local-path): hapus PVC → PV + data ikut hilang.
+  `Retain` = data diselamatkan buat recovery manual (pilih ini untuk data penting).
+- **DRILL #2 LULUS:** Pod `broken-storage` → `claimName` PVC tak ada → **Pending**
+  (`FailedScheduling`, akar: `persistentvolumeclaim "storage-yang-salah" not found`). Nuansa:
+  PVC RWO cuma bisa dibagi 2 Pod kalau **se-node** — "perbaikan" harus sadar access mode + node.
+- **Luka kecil:** `pod/pod-with-pvc.yaml` pakai `nginx:latest` (anti-pattern: deploy
+  non-reproducible, restart bulan depan bisa dapat versi beda, rollback tak bermakna → selalu pin).
+
+**⏭️ Berikutnya — Modul 4: Health check & self-healing** (`replicaset/`, `pod/pod-with-probe`).
+Pemanasan: hapus `nginx-with-storage` + PVC `app-storage` (bersihkan sisa Modul 3). Ingat gotcha
+repo: `pod/pod-with-probe.yaml` **sebenarnya Deployment**, bukan Pod. Target: ownership ReplicaSet
+(self-healing — hapus 1 Pod, controller bikin ganti), lalu readiness vs liveness vs startup probe
+(beda dampak: readiness copot dari endpoints, liveness bunuh+restart container). Drill: probe salah
+port → CrashLoopBackOff / endpoints kosong.
+Keadaan cluster akhir sesi: StorageClass `local-path` terpasang; Pod `nginx-with-storage` (Running
+di `rke-worker`) + PVC/PV `app-storage` (Bound, berisi `bukti.txt`) masih ada; namespace `learning`
+selebihnya bersih.
 
 ## Cara melanjutkan di perangkat lain
 1. `git pull` repo ini — skill tutor + silabus ikut terbawa (`.claude/skills/k8s-belajar/`).

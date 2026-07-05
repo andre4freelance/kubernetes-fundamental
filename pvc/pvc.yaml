@@ -3,6 +3,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: app-storage
 spec:
+  storageClassName: local-path
   accessModes:
     - ReadWriteOnce
   resources:
