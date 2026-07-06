@@ -17,7 +17,7 @@ per sesi ±1 jam.
 | 1 | Workload: Deployment, Service, rolling update, ImagePullBackOff | `deployment/`, `service/` | ✅ |
 | 2 | Konfigurasi: ConfigMap & Secret (env vs mount, base64 ≠ enkripsi, drill `CreateContainerConfigError`) | `configmap/`, `secret/`, `deployment/deployment-{configmap,secret}-*`, `pod/pod-with-{cm,secret}` | ✅ |
 | 3 | Storage: PVC/PV/StorageClass (pasang local-path-provisioner, bukti data persisten) | `pvc/`, `pod/pod-with-pvc` | ✅ |
-| 4 | Health check & self-healing: ReplicaSet ownership, readiness vs liveness vs startup | `replicaset/`, `pod/pod-with-probe` | ⬜ |
+| 4 | Health check & self-healing: ReplicaSet ownership, readiness vs liveness vs startup | `replicaset/`, `pod/pod-with-probe` | ✅ |
 | 5 | Resource management: requests/limits, QoS, OOMKilled, LimitRange, ResourceQuota | `pod/pod-with-limit`, `limitrange/`, `resourcequota/` | ⬜ |
 | 6 | Autoscaling: HPA + load test (metrics-server sudah ada di RKE2) | `hpa/` | ⬜ |
 | 7 | Expose: 3 tipe Service + Ingress host/path routing (ingress-nginx sudah ada) | `service/`, `ingress/` | ⬜ |
@@ -158,15 +158,77 @@ per sesi ±1 jam.
 - **Luka kecil:** `pod/pod-with-pvc.yaml` pakai `nginx:latest` (anti-pattern: deploy
   non-reproducible, restart bulan depan bisa dapat versi beda, rollback tak bermakna → selalu pin).
 
-**⏭️ Berikutnya — Modul 4: Health check & self-healing** (`replicaset/`, `pod/pod-with-probe`).
-Pemanasan: hapus `nginx-with-storage` + PVC `app-storage` (bersihkan sisa Modul 3). Ingat gotcha
-repo: `pod/pod-with-probe.yaml` **sebenarnya Deployment**, bukan Pod. Target: ownership ReplicaSet
-(self-healing — hapus 1 Pod, controller bikin ganti), lalu readiness vs liveness vs startup probe
-(beda dampak: readiness copot dari endpoints, liveness bunuh+restart container). Drill: probe salah
-port → CrashLoopBackOff / endpoints kosong.
-Keadaan cluster akhir sesi: StorageClass `local-path` terpasang; Pod `nginx-with-storage` (Running
-di `rke-worker`) + PVC/PV `app-storage` (Bound, berisi `bukti.txt`) masih ada; namespace `learning`
-selebihnya bersih.
+### ✅ Modul 4 — Health Check & Self-Healing — LULUS checkpoint
+
+**Setup lintas-laptop (bukan k8s, tapi bikin nyangkut):** di laptop kerja default
+`~/.kube/config` cuma berisi `current-context: rancher` TANPA definisi context → `kubectl` error
+"context was not found". Fix: **merge** kubeconfig latihan ke default —
+`KUBECONFIG=~/.kube/rke.config:~/.kube/config kubectl config view --flatten > config.merged` →
+timpa `~/.kube/config`. Sekarang default punya 2 context: **`local`** (akses langsung RKE2) &
+**`rancher`** (lewat Rancher proxy — ternyata cluster yang SAMA). Pindah cukup `use-context`,
+tak perlu `export KUBECONFIG`. Refleks tetap: `current-context` = `local` sebelum mutate.
+
+**Self-healing (ReplicaSet) — Sesi 4a:**
+- **Reconciliation loop lagi:** RS controller terus mencocokkan `desired` vs `actual`. Hapus 1
+  dari 3 Pod → actual jadi 2 → controller **bikin Pod BARU** (nama baru, umur 0) menutup gap.
+  Bukan "menghidupkan Pod lama" — itu penggantian. Nama Pod RS = `nginx-demo-<random>`
+  (Deployment nambah segmen hash: `nginx-demo-<hash>-<random>`).
+- **Kepemilikan & cascading deletion:** `ownerReferences` di Pod = "akta kelahiran" (muncul di
+  `describe` sbagai `Controlled By: ReplicaSet/...`). **Garbage collector** menyapu anak saat
+  induk dihapus. `kubectl delete rs` (default) → 3 Pod ikut mati. `--cascade=orphan` → RS hilang,
+  3 Pod **yatim tetap hidup** (dibuktikan langsung). Lanjutan Modul 3 (Deployment→RS→Pod).
+- **3 policy propagasi:** `background` (default — induk mati dulu, anak nyusul async),
+  `foreground` (anak habis dulu, induk baru resmi hilang — induk nyangkut `Terminating`),
+  `orphan` (putus `ownerReferences`, anak dibiarkan). Field API: `propagationPolicy`.
+
+**Probes — Sesi 4b (inti modul):**
+- **Tiga probe = tiga pertanyaan berbeda.** readiness "siap terima traffic?", liveness "masih
+  hidup/tidak nge-hang?", startup "sudah selesai booting?".
+- **DRILL readiness (`httpGet` path → `/salah`, 404):** Pod tetap **`Running` tapi `0/1`**,
+  **RESTARTS 0** (readiness TIDAK membunuh), dicopot dari routing. Nuansa EndpointSlice (vs
+  `Endpoints` lama): alamat Pod sakit **tetap terdaftar** tapi dgn `conditions.ready:false` →
+  kube-proxy skip. **Efek rollout:** ubah probe = ubah `template` → RS baru → tapi Pod baru tak
+  pernah Ready → dengan `maxUnavailable` default, Deployment **menolak membunuh Pod lama sehat**
+  → **rollout MACET**. Pelajaran: readiness probe yang benar = **gerbang keamanan deploy**
+  (versi rusak tak menggantikan versi sehat). Readiness punya 2 peran: gerbang traffic runtime +
+  gerbang rollout.
+- **DRILL liveness (path → `/salah`):** RESTARTS **naik terus**, status **`CrashLoopBackOff`**,
+  container **dibunuh & di-restart di tempat** (nama Pod TETAP — beda dari readiness). `BackOff`
+  = jeda restart eksponensial (10→20→40s… cap 5 mnt), konsep sama `ImagePullBackOff` Modul 1.
+  Timing restart pertama: `initialDelaySeconds 10` + `failureThreshold 3 × periodSeconds 10` ≈
+  **30 dtk**.
+- **Insight production terpenting:** nginx-nya SEHAT — yang membunuh adalah **probe kita yang
+  salah**. → **`CrashLoopBackOff` ≠ selalu "app crash"**; bisa "liveness terus membunuh app
+  sehat". Tiket insiden klasik: **liveness yang ikut cek DB** → DB lambat → **semua** Pod gagal
+  liveness **serentak** → **restart massal** → outage kecil jadi besar. Aturan: **liveness harus
+  lebih murah & bodoh dari readiness** (cek dependency itu tugas readiness — efeknya reversibel).
+- **startupProbe** (nalar, tak hands-on): gerbang sebelum liveness/readiness — selama belum lolos,
+  keduanya **ditahan**, biar app yang lambat boot (mis. 90 dtk load model) tak dibunuh liveness di
+  tengah boot. Gagal terus → berperilaku **seperti liveness** (restart). Pengganti trik lama
+  `initialDelaySeconds` besar (yang jelek: delay itu berlaku tiap restart, bukan cuma boot pertama).
+- **Tabel kunci (analogi kasir toko — readiness=saklar traffic reversibel; liveness/startup=tombol
+  restart yang membunuh):**
+
+  | Probe gagal | Pod STATUS | Dapat traffic? | RESTARTS |
+  |---|---|---|---|
+  | readiness | `Running` | ❌ | `0` |
+  | liveness | `CrashLoopBackOff` | ❌ | 🔺 naik |
+  | startup (terus) | `CrashLoopBackOff` | ❌ | 🔺 naik |
+
+- **Cara sabotase deklaratif:** user mengedit `pod/pod-with-probe.yaml` sendiri (uncomment
+  `livenessProbe`, path `/salah`) lalu `apply` — bukan `kubectl patch` imperatif. Bahas imperative
+  (`patch`/`edit`/`scale` — cepat, jejak hilang, buat hotfix/CI) vs declarative (`apply -f` — di
+  git, bisa review/rollback, norma sehari-hari). Refleks: `apply --dry-run=client` sebelum apply.
+
+**⏭️ Berikutnya — Modul 5: Resource Management & Governance** (`pod/pod-with-limit`, `limitrange/`,
+`resourcequota/`). Target: requests (dasar scheduling) vs limits (enforcement runtime), demo
+**OOMKilled** (memori > limit), QoS class (Guaranteed/Burstable/BestEffort — siapa dievict duluan),
+lalu LimitRange (default resource disuntik otomatis) + ResourceQuota (create ditolak saat lampaui
+quota; kenapa Quota `requests.*` butuh LimitRange). Nyambung ke Modul 6 (HPA butuh requests).
+Keadaan cluster akhir sesi: StorageClass `local-path` masih terpasang; Deployment+Service
+`nginx-demo` (dari drill probe, readiness `/` sehat + liveness `/salah` rusak) **perlu dibersihkan**
+sebelum Modul 5; `pod/pod-with-probe.yaml` diedit user (liveness `/salah`) — **revert via
+`git checkout`**.
 
 ## Cara melanjutkan di perangkat lain
 1. `git pull` repo ini — skill tutor + silabus ikut terbawa (`.claude/skills/k8s-belajar/`).
