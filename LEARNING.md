@@ -1,9 +1,10 @@
 # Kubernetes Learning — Progress & Recap
 
-Catatan belajar Kubernetes terstruktur, dipakai lintas perangkat (pull repo → buka Claude CLI
-→ lanjut dari sini). Panduan tutor + silabus detail ada di skill **`k8s-belajar`** yang ikut
-ter-commit di repo (`.claude/skills/k8s-belajar/`) — otomatis terdeteksi Claude Code di mesin
-mana pun.
+Catatan belajar Kubernetes terstruktur, dipakai lintas perangkat **dan lintas AI tool**
+(pull repo → buka AI assistant apa pun → lanjut dari sini). Instruksi tutor untuk AI ada di
+**`AGENTS.md`** di root repo (standar lintas-tool); untuk Claude Code ada padanannya berupa
+skill **`k8s-belajar`** (`.claude/skills/k8s-belajar/`) yang terdeteksi otomatis. Silabus
+detail per modul: `.claude/skills/k8s-belajar/MODULES.md`.
 
 **Tujuan:** siap kerja DevOps/SRE. **Cakupan plan ini:** fundamental (seluruh resource repo
 ini) sampai lulus capstone Modul 8; topik lanjutan dibahas setelah itu. **Pace:** fleksibel,
@@ -225,14 +226,24 @@ tak perlu `export KUBECONFIG`. Refleks tetap: `current-context` = `local` sebelu
 **OOMKilled** (memori > limit), QoS class (Guaranteed/Burstable/BestEffort — siapa dievict duluan),
 lalu LimitRange (default resource disuntik otomatis) + ResourceQuota (create ditolak saat lampaui
 quota; kenapa Quota `requests.*` butuh LimitRange). Nyambung ke Modul 6 (HPA butuh requests).
-Keadaan cluster akhir sesi: StorageClass `local-path` masih terpasang; Deployment+Service
-`nginx-demo` (dari drill probe, readiness `/` sehat + liveness `/salah` rusak) **perlu dibersihkan**
-sebelum Modul 5; `pod/pod-with-probe.yaml` diedit user (liveness `/salah`) — **revert via
-`git checkout`**.
+
+## Keadaan cluster saat ini (verifikasi di awal sesi berikutnya)
+
+- **StorageClass `local-path` terpasang permanen** (manifest: `pvc/local-path-provisioner.yaml`),
+  sengaja **non-default** — PVC harus eksplisit `storageClassName: local-path`.
+- **Sisa drill Modul 4 kemungkinan masih jalan** di namespace `learning`: Deployment+Service
+  `nginx-demo` (readiness `/` sehat + liveness `/salah` rusak → `CrashLoopBackOff`).
+  **Bersihkan dulu sebelum mulai Modul 5** (`kubectl -n learning delete -f pod/pod-with-probe.yaml`
+  atau delete deployment/service `nginx-demo`).
+- `pod/pod-with-probe.yaml` di repo **sudah di-revert** ke kondisi asli (liveness ter-comment) —
+  tidak ada aksi git yang tertunda.
 
 ## Cara melanjutkan di perangkat lain
-1. `git pull` repo ini — skill tutor + silabus ikut terbawa (`.claude/skills/k8s-belajar/`).
+1. `git pull` repo ini — instruksi tutor ikut terbawa: `AGENTS.md` (semua AI tool) +
+   skill `k8s-belajar` (`.claude/skills/k8s-belajar/`, khusus Claude Code).
 2. Pastikan kubeconfig cluster `learning` tersedia di perangkat itu (context `local`);
    path-nya per-mesin dan tidak disimpan di repo.
-3. Buka Claude Code di repo ini, minta **"lanjut belajar Kubernetes"** — skill `k8s-belajar`
-   terdeteksi otomatis, membaca file ini, dan melanjutkan dari checkpoint terakhir.
+3. Buka AI tool pilihan di repo ini, minta **"lanjut belajar Kubernetes"**:
+   - **Claude Code** → skill `k8s-belajar` terdeteksi otomatis;
+   - **tool lain** (Codex, Gemini CLI, Cursor, dll.) → tool membaca `AGENTS.md`.
+   Keduanya membaca file ini dan melanjutkan dari checkpoint ⏭️ terakhir.

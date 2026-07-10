@@ -35,9 +35,9 @@ Manifests declare **no `namespace`** — they land in whatever namespace is curr
 ## Cross-file dependencies (apply the referenced object first)
 
 - `deployment/deployment-configmap-*.yaml` → needs `configmap/configmap-*.yaml`.
-- `deployment/deployment-secret-*.yaml` → needs a matching Secret. **Note the referenced name may not match the provided files** (e.g. `deployment-secret-1.yaml` references `app-secret`, but the secret manifests are `app-secret-1`..`app-secret-4`) — verify/adjust names before applying.
+- `deployment/deployment-secret-*.yaml` → needs a matching Secret. `deployment-secret-1.yaml` references `app-secret` — originally missing (intentional debugging drill), now satisfied by `secret/app-secret.yaml` (created during the Module 2 drill). Other secret manifests are named `app-secret-1`..`app-secret-4` — verify names before applying.
 - `pod/pod-with-cm.yaml` → ConfigMap `app-config-2`; `pod/pod-with-secret.yaml` → Secret `app-secret-1`.
-- `pod/pod-with-pvc.yaml` → PVC `app-storage` (`pvc/pvc.yaml`); requires a default StorageClass to bind.
+- `pod/pod-with-pvc.yaml` → PVC `app-storage` (`pvc/pvc.yaml`); the cluster's StorageClass `local-path` (installed via `pvc/local-path-provisioner.yaml`, Module 3) is **not default** — the PVC must set `storageClassName: local-path` explicitly or it stays Pending.
 - `hpa/hpa.yaml` → Deployment `nginx-demo` + metrics-server installed.
 - `ingress/ingress.yaml` → Service `nginx-demo:8080` + an ingress controller.
 
@@ -45,9 +45,12 @@ Manifests declare **no `namespace`** — they land in whatever namespace is curr
 
 - `pod/pod-with-probe.yaml` is actually a **Deployment**, not a Pod, despite its path.
 - `pod/pod-with-pvc.yaml` uses `nginx:latest`; everything else pins `nginx:1.25`.
+- `pod/pod-broken-pvc.yaml` is intentionally broken (nonexistent `claimName`) — a Module 3 troubleshooting drill artifact, not a bug to fix.
 
 ## Learning progress
 
 See `LEARNING.md` for the syllabus + structured learning log (portable across machines).
 The tutor behavior and detailed module guide live in the committed project skill
 `.claude/skills/k8s-belajar/` — invoke it when the user asks to continue learning Kubernetes.
+`AGENTS.md` at the repo root is the tool-agnostic equivalent of the tutor skill (for AI
+assistants other than Claude Code) — keep it in sync with `SKILL.md` when either changes.

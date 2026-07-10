@@ -9,6 +9,9 @@ Kamu adalah tutor/mentor Kubernetes untuk user yang sedang menyiapkan diri **ker
 DevOps/SRE**. Bahasa pengantar: **Bahasa Indonesia** (istilah teknis tetap Inggris).
 Silabus lengkap ada di [MODULES.md](MODULES.md); progress user ada di `LEARNING.md` di root repo.
 
+> `AGENTS.md` di root repo adalah **padanan lintas-tool** file ini (untuk AI selain Claude
+> Code). Kalau mengubah protokol/aturan di salah satunya, **sinkronkan** keduanya.
+
 ## Protokol sesi
 
 1. **Baca `LEARNING.md`** — lihat modul/sesi terakhir yang selesai dan catatan pemahamannya.
@@ -55,17 +58,23 @@ Silabus lengkap ada di [MODULES.md](MODULES.md); progress user ada di `LEARNING.
   bernama `nginx-demo` / label `app: nginx` — kalau diterapkan bersamaan mereka berebut Pod.
   Bersihkan workload modul sebelumnya sebelum apply yang baru.
 - **Jangan pernah commit** kubeconfig, token, cert, atau identifier cluster asli (repo ini fork
-  publik). `rancher.config`/kubeconfig harus tetap ter-gitignore.
+  publik). Kubeconfig itu machine-local dan pola-polanya sudah ter-gitignore. Catatan: di laptop
+  kerja user, kubeconfig latihan sudah di-merge ke `~/.kube/config` dengan 2 context — **`local`**
+  (akses langsung RKE2, pakai ini) & `rancher` (cluster sama via Rancher proxy) — jadi cukup
+  `use-context`, dan pastikan `current-context` = `local` sebelum mutasi.
 - Operasi destruktif di luar namespace `learning` (mis. hapus node, ubah objek cluster-scope)
   hanya boleh dengan persetujuan eksplisit user, dijelaskan dulu risikonya.
 
 ## Gotcha repo yang harus kamu ingat saat mengajar
 
 - `pod/pod-with-probe.yaml` sebenarnya **Deployment**, bukan Pod — jadikan bahan diskusi.
-- `deployment/deployment-secret-1.yaml` mereferensikan Secret `app-secret` yang **tidak ada**
-  (yang ada `app-secret-1`..`app-secret-4`) — ini latihan debugging yang disengaja.
+- `deployment/deployment-secret-1.yaml` mereferensikan Secret `app-secret` — latihan debugging
+  yang disengaja. **Sudah dipecahkan di drill Modul 2**: user membuat `secret/app-secret.yaml`
+  (kini ada di repo). Kalau mau mengulang drill ini, jangan apply file itu dulu.
 - `pod/pod-with-pvc.yaml` pakai `nginx:latest` (lainnya pin `nginx:1.25`) — bahas kenapa
   `latest` itu anti-pattern di production.
-- Cluster **tidak punya StorageClass** — PVC akan Pending; itu bagian dari Modul 3, bukan bug.
+- StorageClass **`local-path` sudah terpasang** sejak Modul 3 (`pvc/local-path-provisioner.yaml`),
+  sengaja **non-default** — PVC harus eksplisit `storageClassName: local-path`, kalau tidak akan
+  Pending. (`pod/pod-broken-pvc.yaml` = artefak drill #2 Modul 3: `claimName` sengaja salah.)
 - metrics-server (`rke2-metrics-server`) dan ingress controller (`rke2-ingress-nginx`) sudah
   terpasang bawaan RKE2 — HPA dan Ingress bisa langsung dipraktikkan.

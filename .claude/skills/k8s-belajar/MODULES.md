@@ -23,7 +23,7 @@ scheduling & taint, rolling update/rollback, diagnosa ImagePullBackOff. Recap di
 
 ---
 
-## Modul 2 — Konfigurasi: ConfigMap & Secret
+## Modul 2 — Konfigurasi: ConfigMap & Secret ✅ (selesai — lulus checkpoint; recap di `LEARNING.md`)
 
 **Kenapa penting untuk DevOps/SRE:** memisahkan config dari image adalah dasar 12-factor;
 salah kelola Secret adalah salah satu insiden keamanan paling umum.
@@ -56,7 +56,10 @@ salah kelola Secret adalah salah satu insiden keamanan paling umum.
 3. Konsumsi via `deployment-secret-2` dan `pod/pod-with-secret.yaml`.
 4. **Drill sabotase bawaan repo:** `deployment-secret-1` mereferensikan Secret `app-secret`
    yang tidak ada → Pod `CreateContainerConfigError`. User harus menemukan sendiri akar
-   masalahnya lewat `describe`, lalu memperbaiki nama referensi.
+   masalahnya lewat `describe`, lalu memilih fix: ubah referensi ke Secret yang ada, atau
+   buat Secret `app-secret` baru. *(Sudah dikerjakan: user memilih membuat
+   `secret/app-secret.yaml` — blast radius kecil; file kini ada di repo. Untuk mengulang
+   drill, jangan apply file itu dulu.)*
 
 ### Sesi 2c — Praktik production
 - RBAC membatasi siapa yang bisa `get secret`; etcd encryption at rest; kenapa perusahaan
@@ -69,7 +72,7 @@ base64 ≠ enkripsi; menyelesaikan drill `CreateContainerConfigError` < 10 menit
 
 ---
 
-## Modul 3 — Storage: PVC, PV & StorageClass
+## Modul 3 — Storage: PVC, PV & StorageClass ✅ (selesai — lulus checkpoint; recap di `LEARNING.md`)
 
 **File repo:** `pvc/pvc.yaml` (PVC `app-storage`), `pod/pod-with-pvc.yaml`.
 
@@ -79,7 +82,8 @@ base64 ≠ enkripsi; menyelesaikan drill `CreateContainerConfigError` < 10 menit
 [local-path-provisioner](https://github.com/rancher/local-path-provisioner)
 
 ### Sesi 3a — Kenapa PVC Pending (belajar dari kegagalan yang disengaja)
-1. Cluster ini **tidak punya StorageClass** — apply `pvc.yaml` dan amati `Pending`.
+1. Cluster ini **awalnya tidak punya StorageClass** *(sekarang sudah ada `local-path`,
+   non-default — dipasang di Sesi 3b)* — apply `pvc.yaml` dan amati `Pending`.
    `describe` → "no storage class is set". Ini bukan bug; ini pelajaran rantai
    PVC → StorageClass → provisioner → PV.
 2. Bedakan static provisioning (admin bikin PV manual) vs dynamic (StorageClass + provisioner).
@@ -87,7 +91,10 @@ base64 ≠ enkripsi; menyelesaikan drill `CreateContainerConfigError` < 10 menit
 ### Sesi 3b — Pasang provisioner & pakai storage
 1. Install `local-path-provisioner` (proyek Rancher, cocok dengan RKE2) — latihan admin
    pertama di luar namespace `learning`; jelaskan dulu apa yang di-apply dan ke mana.
-   Jadikan `local-path` StorageClass default.
+   *(Sudah dikerjakan: manifest tersimpan di `pvc/local-path-provisioner.yaml`, StorageClass
+   dibiarkan **non-default** — keputusan: PVC menyebut `storageClassName: local-path`
+   **eksplisit** (explicit > implicit). Ingat: `storageClassName` immutable → salah kelas =
+   delete + recreate PVC.)*
 2. PVC bind → jalankan `pod-with-pvc.yaml`, tulis file ke volume, **hapus Pod, buat lagi,
    buktikan data selamat** (inti "persistent").
 3. Konsep: `accessModes` (kenapa RWO paling umum; RWX butuh storage jaringan),
@@ -101,7 +108,7 @@ dan menjawab: "PVC dihapus, datanya ikut hilang tidak?" (jawaban: tergantung rec
 
 ---
 
-## Modul 4 — Health Check & Self-Healing
+## Modul 4 — Health Check & Self-Healing ✅ (selesai — lulus checkpoint; recap di `LEARNING.md`)
 
 **File repo:** `pod/pod-with-probe.yaml` (**sebenarnya Deployment** — bahas kenapa penamaan
 file menyesatkan itu masalah nyata di repo tim), `replicaset/replicaset.yaml`.
