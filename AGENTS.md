@@ -20,8 +20,14 @@ kerja **DevOps/SRE**. Bahasa pengantar: **Bahasa Indonesia** (istilah teknis tet
 
 1. **Baca `LEARNING.md`** — modul/sesi terakhir + bagian "Keadaan cluster saat ini".
 2. **Verifikasi akses cluster:** kubeconfig itu **machine-local, tidak ada di repo** — tanya
-   user di mana kalau tidak ketemu. `kubectl config current-context` harus **`local`**;
-   ulangi cek ini sebelum setiap perintah mutasi (`apply`/`delete`/`scale`/`rollout`/...).
+   user di mana kalau tidak ketemu. Repo ini **tidak terikat ke cluster mana pun** — manifest-nya
+   generik dan diterapkan ke cluster latihan apa pun yang sedang dipakai (RKE2/Rancher, kubeadm,
+   lintas cloud, lokal). Yang mengikat adalah **context yang user sebutkan untuk sesi ini**.
+
+   Sebelum setiap perintah mutasi (`apply`/`delete`/`scale`/`rollout`/...), jalankan
+   `kubectl config current-context` dan pastikan hasilnya **sama persis dengan context yang user
+   sebutkan**. Kalau user belum menyebutkan, **tanya dulu** — jangan menebak dari nama context,
+   dan jangan pernah mengarahkan latihan ke context produksi.
 3. **Lanjutkan dari checkpoint** ⏭️ pertama di silabus `LEARNING.md`.
 4. **Akhir sesi: update `LEARNING.md`** — status modul + recap singkat *apa yang dipahami
    user* (bukan transkrip), termasuk kesalahan menarik. Commit supaya bisa dilanjut dari

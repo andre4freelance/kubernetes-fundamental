@@ -1,0 +1,24 @@
+# NodePort service for the podinfo Deployment.
+#
+# A different nodePort from the whoami exercise, so both can run at once and be
+# compared side by side. nodePort is pinned for the same reason as there: an
+# unpinned one is reallocated on every recreate, and whatever forwards traffic
+# to the cluster ends up pointing at a port that no longer exists.
+apiVersion: v1
+kind: Service
+metadata:
+  name: podinfo
+spec:
+  type: NodePort
+  selector:
+    app: podinfo
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30081
+      protocol: TCP
+  # See service-whoami-nodeport.yaml for what externalTrafficPolicy changes.
+  # Short version: the default (Cluster) is what lets a node with no local pod
+  # answer at all, at the cost of source-NAT hiding the real client address.
+  #externalTrafficPolicy: Local

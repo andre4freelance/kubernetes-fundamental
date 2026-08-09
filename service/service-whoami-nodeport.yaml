@@ -1,0 +1,33 @@
+# NodePort service for the whoami Deployment.
+#
+# nodePort is pinned on purpose. Left unset, Kubernetes allocates a random free
+# port from 30000-32767, and anything in front of the cluster — a firewall
+# rule, a port-forward on an appliance, a load balancer — points at a port that
+# changes every time the Service is recreated.
+apiVersion: v1
+kind: Service
+metadata:
+  name: whoami
+spec:
+  type: NodePort
+  selector:
+    app: whoami
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30080
+      protocol: TCP
+  # externalTrafficPolicy decides what a node does when the request arrives at
+  # a node that has no pod of this Service.
+  #
+  # Cluster (the default, in effect here): ANY node accepts the traffic and
+  # forwards it to a pod wherever it lives. That is what makes an entry point
+  # on a pod-less node work at all. The price is that kube-proxy source-NATs
+  # the packet, so the pod reports the forwarding node's address as the client
+  # instead of the real one.
+  #
+  # Local: the client address is preserved, but a node without a local pod
+  # stops answering entirely. On a cluster whose control-plane node is tainted,
+  # switching to Local makes an entry point on that node go dead — a useful
+  # thing to watch happen deliberately once.
+  #externalTrafficPolicy: Local

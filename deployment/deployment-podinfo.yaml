@@ -1,0 +1,67 @@
+# podinfo — the presentable version of the cross-cloud NodePort exercise.
+#
+# Same idea as deployment-whoami.yaml, but podinfo renders an actual web UI
+# instead of a plain-text dump, so it is worth looking at rather than only
+# reading. It still answers the question that matters here — WHICH pod on WHICH
+# node served this request — because the UI message is filled from the node
+# name through the Downward API, and the page also shows the pod hostname.
+#
+# On a two-node cluster whose control-plane node is tainted, every replica
+# lands on the worker. Entering through the control-plane node's NodePort
+# therefore always crosses to the other node before a pod answers.
+#
+# Own name and label (podinfo / app: podinfo): no collision with nginx-demo or
+# whoami, so all three can coexist.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podinfo
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: podinfo
+  template:
+    metadata:
+      labels:
+        app: podinfo
+    spec:
+      containers:
+        - name: podinfo
+          image: stefanprodan/podinfo:6.14.1
+          ports:
+            - name: http
+              containerPort: 9898
+          env:
+            # Downward API: the scheduler decides this, so the page can state
+            # where it is running without anything being hardcoded.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # $(VAR) expands against env vars declared EARLIER in this list.
+            - name: PODINFO_UI_MESSAGE
+              value: "served by node $(NODE_NAME)"
+            - name: PODINFO_UI_COLOR
+              value: "#0f766e"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+      # Uncomment to let replicas run on the control-plane node too, so the
+      # same entry point can serve a local pod and a remote one.
+      #tolerations:
+      #  - key: node-role.kubernetes.io/control-plane
+      #    effect: NoSchedule

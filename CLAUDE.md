@@ -20,7 +20,7 @@ Manifests declare **no `namespace`** — they land in whatever namespace is curr
 ## Cluster access & safety (IMPORTANT)
 
 - The learning cluster is a **Rancher / RKE2** cluster reached through an **isolated kubeconfig** kept **out of git** (context `local`). The kubeconfig path and any cluster endpoints are machine-local — see local memory, not this file.
-- **Always run `kubectl config current-context` before any mutating command** (`apply`/`delete`/`scale`/…). Never point learning applies at a production context. Contexts can change between machines and sessions.
+- **Always run `kubectl config current-context` before any mutating command** (`apply`/`delete`/`scale`/…). This repo is **not tied to any one cluster**: the manifests are generic and get applied to whichever practice cluster is currently in use (RKE2/Rancher, kubeadm, cross-cloud, local). The binding fact is the context the user names for the session — confirm `current-context` matches it, and ask if they have not named one. Never infer it from the context name, and never point learning applies at a production context.
 - A `kubernetes` MCP server may be configured in **non-destructive mode** (delete operations disabled) — use `kubectl` directly for deletes.
 - **Never commit secrets:** kubeconfigs, tokens, certs, and this project's real cluster identifiers stay in `.gitignore` (the repo is a public fork).
 

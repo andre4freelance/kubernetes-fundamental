@@ -1,0 +1,47 @@
+# whoami — workload for the cross-cloud NodePort exercise.
+#
+# Every reply names the pod that served it and reports the client address that
+# pod actually sees. That makes two things visible which a default nginx page
+# hides completely: which replica answered, and how many times the source
+# address was rewritten on the way in.
+#
+# Scheduling note: a control-plane node carries a NoSchedule taint, so on a
+# two-node cluster every replica lands on the worker. Traffic that enters
+# through the control-plane node's NodePort is therefore always forwarded to
+# another node before it reaches a pod — which is exactly the behaviour this
+# exercise is meant to expose.
+#
+# Uses its own name and label (whoami / app: whoami), so it does NOT collide
+# with the nginx-demo workloads in this repo and can run alongside them.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whoami
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: whoami
+  template:
+    metadata:
+      labels:
+        app: whoami
+    spec:
+      containers:
+        - name: whoami
+          image: traefik/whoami:v1.12.0
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+      # Uncomment to let replicas schedule on the control-plane node too, so a
+      # local pod and a remote one can be compared from the same entry point.
+      # Deliberately off by default: scheduling application workloads onto a
+      # control plane is not something to carry into a real cluster.
+      #tolerations:
+      #  - key: node-role.kubernetes.io/control-plane
+      #    effect: NoSchedule
