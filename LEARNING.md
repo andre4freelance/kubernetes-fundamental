@@ -238,6 +238,42 @@ quota; kenapa Quota `requests.*` butuh LimitRange). Nyambung ke Modul 6 (HPA but
 - `pod/pod-with-probe.yaml` di repo **sudah di-revert** ke kondisi asli (liveness ter-comment) —
   tidak ada aksi git yang tertunda.
 
+## Sesi tambahan (di luar silabus modul) — kubeadm cross-cloud lab, 2026-08-10
+
+Bukan di cluster RKE2 di atas — di cluster kubeadm terpisah (Alibaba + Azure,
+1 master + 2 worker, dibahas di `ai-ops/knowledge/runbooks/
+kubernetes-cross-cloud-kubeadm-flannel-over-tunnel.md`). Dicatat di sini juga
+karena konsepnya generik, bukan spesifik cluster:
+
+- **`kubeadm join` = 3 hal yang harus sinkron:** versi `kubeadm`/`kubelet`/
+  `kubectl` (pin exact minor, jangan asal `apt install`), config `containerd`
+  (`SystemdCgroup=true` + image `pause` yang dipakai `containerd` harus sama
+  persis dengan yang di-pull `kubeadm` — beda versi bikin pod restart random
+  tanpa error jelas), dan token+hash dari `kubeadm token create
+  --print-join-command` di control-plane (token expired ~24 jam, generate
+  baru tiap mau join).
+- **Image custom "identik" ≠ behavior identik.** Worker baru dibuat dari image
+  yang sama persis dengan master, tapi default login user-nya `root`, bukan
+  `ubuntu` seperti master — user `ubuntu` di master ternyata dibuat manual,
+  bukan bawaan image. Pelajaran: jangan asumsikan image sama = konfigurasi
+  OS-level sama, terutama untuk hal yang biasa dianggap "given" kayak default
+  user.
+- **kubeconfig = 3 bagian yang saling rujuk by name:** `clusters` (alamat API
+  server + CA), `users` (kredensial), `contexts` (pasangan cluster+user+
+  namespace, ini yang di-`use-context`). Ganti context cuma ganti pointer,
+  tidak ubah isi cluster/user.
+- **Sertifikat TLS API server cuma valid untuk alamat yang didaftarkan
+  (SAN — Subject Alternative Name) saat cluster dibuat.** Akses dari alamat
+  di luar itu (mis. IP publik lewat NAT) ditolak `x509: certificate is valid
+  for ..., not ...`. Fix yang benar: tambah SAN baru + regenerate sertifikat
+  (`kubeadm init phase certs apiserver`) — BUKAN `insecure-skip-tls-verify`
+  di client, itu cuma nutup mata client-nya, server tetap "salah alamat".
+  Analoginya: benerin KTP-nya, jangan suruh satpam berhenti cek KTP.
+- **Kebiasaan yang sama berlaku lintas cluster:** kubeconfig cluster
+  eksperimen tidak pernah digabung ke `~/.kube/config` default (itu cluster
+  production client) — selalu file terpisah + `KUBECONFIG` env var, sama
+  seperti pola `belajar.config` untuk cluster RKE2 di atas.
+
 ## Cara melanjutkan di perangkat lain
 1. `git pull` repo ini — instruksi tutor ikut terbawa: `AGENTS.md` (semua AI tool) +
    skill `k8s-belajar` (`.claude/skills/k8s-belajar/`, khusus Claude Code).
