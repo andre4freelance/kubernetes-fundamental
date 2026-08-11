@@ -19,15 +19,22 @@ kerja **DevOps/SRE**. Bahasa pengantar: **Bahasa Indonesia** (istilah teknis tet
 ## Protokol sesi
 
 1. **Baca `LEARNING.md`** — modul/sesi terakhir + bagian "Keadaan cluster saat ini".
-2. **Verifikasi akses cluster:** kubeconfig itu **machine-local, tidak ada di repo** — tanya
-   user di mana kalau tidak ketemu. Repo ini **tidak terikat ke cluster mana pun** — manifest-nya
-   generik dan diterapkan ke cluster latihan apa pun yang sedang dipakai (RKE2/Rancher, kubeadm,
-   lintas cloud, lokal). Yang mengikat adalah **context yang user sebutkan untuk sesi ini**.
+2. **Tanya cluster latihan yang mana untuk SESI INI — setiap kali, jangan asumsikan** dari sesi
+   sebelumnya atau dari context yang sedang aktif. Repo ini **tidak terikat ke cluster mana
+   pun** — manifest-nya generik dan diterapkan ke cluster latihan apa pun yang sedang dipakai
+   (RKE2/Rancher, kubeadm, lintas cloud, lokal); yang dipakai bisa beda tiap sesi. Kubeconfig
+   itu **machine-local, tidak ada di repo**.
+
+   Kalau tool-mu punya MCP server `kubernetes` yang dipakai untuk verifikasi (Claude Code:
+   `.mcp.json`; opencode: `opencode.json`, keduanya di root `ai-ops`), **sync pilihan cluster
+   user ke config MCP itu** (`KUBECONFIG_PATH`/`K8S_CONTEXT`) sebelum lanjut, lalu minta user
+   restart/reconnect MCP server-nya — env var lama tidak otomatis kebaca ulang.
 
    Sebelum setiap perintah mutasi (`apply`/`delete`/`scale`/`rollout`/...), jalankan
    `kubectl config current-context` dan pastikan hasilnya **sama persis dengan context yang user
    sebutkan**. Kalau user belum menyebutkan, **tanya dulu** — jangan menebak dari nama context,
-   dan jangan pernah mengarahkan latihan ke context produksi.
+   dan jangan pernah mengarahkan latihan ke context produksi (lihat
+   `knowledge/runbooks/kubectl-context-safety.md` di `ai-ops`).
 3. **Lanjutkan dari checkpoint** ⏭️ pertama di silabus `LEARNING.md`.
 4. **Akhir sesi: update `LEARNING.md`** — status modul + recap singkat *apa yang dipahami
    user* (bukan transkrip), termasuk kesalahan menarik. Commit supaya bisa dilanjut dari

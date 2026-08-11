@@ -15,11 +15,24 @@ Silabus lengkap ada di [MODULES.md](MODULES.md); progress user ada di `LEARNING.
 ## Protokol sesi
 
 1. **Baca `LEARNING.md`** — lihat modul/sesi terakhir yang selesai dan catatan pemahamannya.
-2. **Verifikasi akses cluster** sebelum perintah apa pun:
-   - Path kubeconfig itu **machine-local** (tidak ada di repo). Cek memory lokal Claude; kalau
-     tidak ada, tanya user di mana kubeconfig-nya, lalu simpan ke memory.
-   - `kubectl config current-context` harus `local`. **Ulangi cek ini sebelum setiap perintah
-     mutasi** (`apply`/`delete`/`scale`/`rollout`/...).
+2. **Tanya cluster latihan yang mana untuk SESI INI — setiap kali, jangan pernah asumsikan**
+   dari sesi sebelumnya, dari `LEARNING.md`, atau dari context yang sedang aktif di MCP.
+   Cluster latihan itu fleksibel by design (repo ini generik, tidak terikat satu cluster);
+   yang dipakai bisa beda tiap sesi. Cluster yang pernah dipakai (sebagai referensi, bukan
+   default): RKE2/Rancher (kubeconfig `~/.kube/belajar.config`, context `local`) dan kubeadm
+   cross-cloud lab (kubeconfig `~/.kube/kubeadm-lab.config`, context `kubeadm-lab`) — bisa juga
+   cluster lain yang user sebutkan.
+   - **Setelah user jawab, sync pilihan itu ke MCP kubernetes di SEMUA AI tool** sebelum
+     lanjut: update `KUBECONFIG_PATH` + `K8S_CONTEXT` di `ai-ops/.mcp.json` (Claude Code) DAN
+     `ai-ops/opencode.json` (opencode) supaya keduanya menunjuk kubeconfig+context yang sama
+     persis dengan jawaban user. Beri tahu user config berubah dan MCP server perlu
+     **restart/reconnect** (env var baru tidak kebaca proses lama).
+   - **Verifikasi:** minta user reconnect, lalu cek `kubectl config current-context` (atau MCP
+     `kubectl_context get` setelah reconnect) — harus **sama persis** dengan jawaban user.
+     **Ulangi cek current-context ini sebelum setiap perintah mutasi**
+     (`apply`/`delete`/`scale`/`rollout`/...) selama sesi berjalan. Kalau hasilnya sebuah
+     ARN/nama cluster produksi, **berhenti** — lihat
+     `knowledge/runbooks/kubectl-context-safety.md` di `ai-ops`.
 3. **Lanjutkan dari checkpoint** — mulai dari item ⏭️ pertama di silabus `LEARNING.md`.
 4. **Akhir sesi: update `LEARNING.md`** — pindahkan status modul/sesi, tulis recap singkat
    *apa yang dipahami user* (bukan transkrip), termasuk kesalahan menarik dan "aha moment".
@@ -58,10 +71,14 @@ Silabus lengkap ada di [MODULES.md](MODULES.md); progress user ada di `LEARNING.
   bernama `nginx-demo` / label `app: nginx` — kalau diterapkan bersamaan mereka berebut Pod.
   Bersihkan workload modul sebelumnya sebelum apply yang baru.
 - **Jangan pernah commit** kubeconfig, token, cert, atau identifier cluster asli (repo ini fork
-  publik). Kubeconfig itu machine-local dan pola-polanya sudah ter-gitignore. Catatan: di laptop
-  kerja user, kubeconfig latihan sudah di-merge ke `~/.kube/config` dengan 2 context — **`local`**
-  (akses langsung RKE2, pakai ini) & `rancher` (cluster sama via Rancher proxy) — jadi cukup
-  `use-context`, dan pastikan `current-context` = `local` sebelum mutasi.
+  publik). Kubeconfig itu machine-local dan pola-polanya sudah ter-gitignore. Catatan penting:
+  kubeconfig **default** (`~/.kube/config`) di workstation user berisi cluster **production EKS**
+  client — jangan pernah pakai itu untuk latihan. Cluster latihan selalu lewat kubeconfig
+  terisolasi terpisah per cluster (mis. `~/.kube/belajar.config` untuk RKE2/Rancher,
+  `~/.kube/kubeadm-lab.config` untuk cluster kubeadm lintas-cloud, context `kubeadm-lab`) —
+  detail & cara gabung beberapa file lab dengan `KUBECONFIG=a:b` ada di
+  `knowledge/runbooks/kubectl-context-safety.md` (`ai-ops`). MCP server `kubernetes` juga harus
+  di-pin (`KUBECONFIG_PATH`/`K8S_CONTEXT` di `.mcp.json`) ke file lab itu, bukan default.
 - Operasi destruktif di luar namespace `learning` (mis. hapus node, ubah objek cluster-scope)
   hanya boleh dengan persetujuan eksplisit user, dijelaskan dulu risikonya.
 
@@ -76,5 +93,8 @@ Silabus lengkap ada di [MODULES.md](MODULES.md); progress user ada di `LEARNING.
 - StorageClass **`local-path` sudah terpasang** sejak Modul 3 (`pvc/local-path-provisioner.yaml`),
   sengaja **non-default** — PVC harus eksplisit `storageClassName: local-path`, kalau tidak akan
   Pending. (`pod/pod-broken-pvc.yaml` = artefak drill #2 Modul 3: `claimName` sengaja salah.)
-- metrics-server (`rke2-metrics-server`) dan ingress controller (`rke2-ingress-nginx`) sudah
-  terpasang bawaan RKE2 — HPA dan Ingress bisa langsung dipraktikkan.
+- **Khusus cluster RKE2/Rancher:** metrics-server (`rke2-metrics-server`) dan ingress controller
+  (`rke2-ingress-nginx`) sudah terpasang bawaan — HPA dan Ingress bisa langsung dipraktikkan.
+  Di cluster lain (mis. kubeadm-lab) **jangan asumsikan** ini ada — cek dulu (`kubectl get
+  deployment -n kube-system metrics-server` / `get pods -A | grep ingress`), pasang manual kalau
+  belum ada sebelum Modul 6/7.
