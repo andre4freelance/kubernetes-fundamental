@@ -19,7 +19,7 @@ per sesi ±1 jam.
 | 2 | Konfigurasi: ConfigMap & Secret (env vs mount, base64 ≠ enkripsi, drill `CreateContainerConfigError`) | `configmap/`, `secret/`, `deployment/deployment-{configmap,secret}-*`, `pod/pod-with-{cm,secret}` | ✅ |
 | 3 | Storage: PVC/PV/StorageClass (pasang local-path-provisioner, bukti data persisten) | `pvc/`, `pod/pod-with-pvc` | ✅ |
 | 4 | Health check & self-healing: ReplicaSet ownership, readiness vs liveness vs startup | `replicaset/`, `pod/pod-with-probe` | ✅ |
-| 5 | Resource management: requests/limits, QoS, OOMKilled, LimitRange, ResourceQuota | `pod/pod-with-limit`, `limitrange/`, `resourcequota/` | ⬜ |
+| 5 | Resource management: requests/limits, QoS, OOMKilled, LimitRange, ResourceQuota | `pod/pod-with-limit`, `limitrange/`, `resourcequota/` | ✅ |
 | 6 | Autoscaling: HPA + load test (metrics-server sudah ada di RKE2) | `hpa/` | ⬜ |
 | 7 | Expose: 3 tipe Service + Ingress host/path routing (ingress-nginx sudah ada) | `service/`, `ingress/` | ⬜ |
 | 8 | **Capstone:** deploy production-style dari nol + drill troubleshooting (ujian akhir) | `capstone/` (ditulis user) | ⬜ |
@@ -221,21 +221,102 @@ tak perlu `export KUBECONFIG`. Refleks tetap: `current-context` = `local` sebelu
   (`patch`/`edit`/`scale` — cepat, jejak hilang, buat hotfix/CI) vs declarative (`apply -f` — di
   git, bisa review/rollback, norma sehari-hari). Refleks: `apply --dry-run=client` sebelum apply.
 
-**⏭️ Berikutnya — Modul 5: Resource Management & Governance** (`pod/pod-with-limit`, `limitrange/`,
-`resourcequota/`). Target: requests (dasar scheduling) vs limits (enforcement runtime), demo
-**OOMKilled** (memori > limit), QoS class (Guaranteed/Burstable/BestEffort — siapa dievict duluan),
-lalu LimitRange (default resource disuntik otomatis) + ResourceQuota (create ditolak saat lampaui
-quota; kenapa Quota `requests.*` butuh LimitRange). Nyambung ke Modul 6 (HPA butuh requests).
+### ✅ Modul 5 — Resource Management & Tata Kelola Namespace — LULUS checkpoint
+
+Dikerjakan di cluster **kubeadm-lab** (bukan RKE2) — sesi ini yang pertama kali cluster latihan
+dipilih eksplisit di awal sesi (lihat protokol baru di `AGENTS.md`/`.claude/skills/k8s-belajar/`:
+tanya cluster tiap sesi, sync ke `.mcp.json`/`opencode.json`, jangan pernah asumsikan).
+
+**Sesi 5a — Requests, limits & QoS:**
+- **Unit CPU `m` (millicpu):** `1000m` = 1 core penuh; ini jatah *waktu* CPU (cgroup CFS quota
+  per periode), bukan pecahan core fisik.
+- **Kenapa CPU di-throttle tapi memory di-`OOMKilled`:** CPU = resource *compressible* (soal
+  waktu, bisa "diperas"/dijadwalkan lebih jarang, proses tetap hidup). Memory = *incompressible*
+  (soal ruang byte yang sudah dialokasikan — nggak bisa "diperlambat", begitu cgroup limit
+  dilampaui, kernel cuma punya opsi bunuh proses via OOM killer).
+- **QoS class — syarat presisi** ([docs](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/)):
+  `Guaranteed` = *setiap* container punya requests+limits CPU & memory **DAN requests==limits
+  persis**; `Burstable` = ada requests/limits tapi nggak memenuhi syarat Guaranteed (mis. requests
+  100m/128Mi ≠ limits 200m/256Mi — nama "Burstable" pas: dijamin dapat requests, boleh "meledak"
+  sampai limits kalau node longgar); `BestEffort` = tanpa requests/limits sama sekali, bisa makan
+  resource sepuasnya tapi juga dikorbankan duluan. Urutan eviction saat node tertekan:
+  **BestEffort → Burstable → Guaranteed** (Guaranteed nyaris nggak pernah, karena nggak ada
+  bagian yang "melebihi request" — requests-nya = limits-nya).
+- **DRILL OOMKilled LULUS:** Pod `pod-oom-demo.yaml` (image `polinux/stress`, `limits.memory:
+  256Mi`, `args: --vm-bytes 300M`) → `Reason: OOMKilled`, `Exit Code: 137` (=`128+9`, sinyal
+  `SIGKILL` — beda dari `exit code 1` biasa). Insight inti (checkpoint): **cgroup memory limit
+  itu lokal ke container**, node yang longgar RAM-nya sama sekali nggak relevan — begitu proses
+  di dalam container coba alokasi melebihi limit cgroup-nya sendiri, OOM killer level-cgroup
+  langsung turun tangan.
+  - **Luka latihan (yang bikin ingat):** placeholder `<angka-lebih-besar-dari-limit>` di skeleton
+    contoh ke-apply **secara literal** sebagai args → `stress` gagal parsing → `exit code 1`
+    (`reason: Error`, BUKAN OOMKilled) → `CrashLoopBackOff` palsu. Diagnosa lewat
+    `lastState.terminated.reason` + `exitCode` (1 vs 137) buat bedain "app error biasa" vs
+    "beneran dibunuh OOM" sebelum nebak-nebak.
+- **Production framing:** `memory limit == memory request` best practice (beda angka →
+  node bisa overcommit kalau banyak Pod burst bareng → OOM level-node yang lebih parah, kena
+  Pod lain juga). CPU limit **diperdebatkan**: sebagian tim sengaja nggak pasang (biar nggak
+  throttling-induced latency saat node longgar), sebagian tetap pasang (predictability, cegah
+  noisy neighbor) — pertanyaan interview SRE klasik.
+
+**Sesi 5b — LimitRange & ResourceQuota (governance):**
+- **Dua alasan Pod ditolak quota — beda pesan, beda akar masalah** (checkpoint inti):
+  1. **Belum dideskripsikan** (`ResourceQuota` nge-track `requests.*`/`limits.*`, Pod nggak
+     nyebut sama sekali) → ditolak **walau kuota masih longgar**: `must specify limits.cpu ...
+     requests.memory ...`. Dibuktikan: `test-noreq` ditolak dengan `requests.memory: 4Gi` masih
+     jauh dari penuh.
+  2. **Beneran lampaui hard cap** → `exceeded quota: ..., requested: pods=1, used: pods=20,
+     limited: pods=20`. Dibuktikan: scale `quota-test` ke 20 replika di namespace yang sudah
+     isi 9 Pod → cuma 11 yang jadi (9+11=20), sisanya ditolak di level ReplicaSet
+     (`FailedCreate` event), Deployment sendiri nggak error, cuma nyangkut `11/20` — reconciliation
+     loop (Modul 4) akan otomatis lanjut kalau kuota dilonggarkan, tanpa aksi manual.
+- **Kenapa LimitRange menghilangkan penolakan #1:** admission control jalan berurut —
+  **LimitRange (mutating, nyuntik default) jalan DULU, baru ResourceQuota (validating, cuma
+  memeriksa) jalan**. Begitu LimitRange aktif, Pod kosong sampai ke tahap quota-check sudah
+  lengkap ke-4 field-nya (bukti: annotation `kubernetes.io/limit-ranger: LimitRanger plugin
+  set: ...`) → quota nggak punya alasan nolak lagi. LimitRange cuma ngisi field yang **kosong**,
+  nggak nimpa yang sudah diisi manual.
+- **Namespace-scoped, bukan node-scoped** (koreksi kecil sesi ini) — `LimitRange`/`ResourceQuota`
+  itu governance per-namespace/tim, nggak nyentuh kapasitas node sama sekali. Best practice
+  production: **satu namespace tim = LimitRange + ResourceQuota sepasang** (Quota doang bikin
+  developer frustrasi lupa isi resources; LimitRange doang nggak nyegah satu tim habisin cluster).
+
+**⏭️ Berikutnya — Modul 6: Autoscaling (HPA)** (`hpa/hpa.yaml`). Target: pastikan Deployment
+`nginx-demo` punya `resources.requests` (nyambung dari Modul 5 — `averageUtilization` dihitung
+dari requests), apply HPA, bangkitkan beban lihat scale-out, lalu amati scale-in yang sengaja
+lambat (stabilization window 5 menit).
 
 ## Keadaan cluster saat ini (verifikasi di awal sesi berikutnya)
 
+Cluster latihan itu **fleksibel per sesi** sejak 2026-08-11 (lihat protokol di `AGENTS.md`/
+`.claude/skills/k8s-belajar/`) — state di bawah dipisah per cluster, jangan diasumsikan cluster
+yang sama dipakai lagi.
+
+**Cluster `kubeadm-lab`** (context `kubeadm-lab`, dipakai sesi Modul 5, 2026-08-11) — namespace
+`learning` **BELUM dibersihkan**, ada di akhir sesi:
+- `LimitRange/default-limit` + `ResourceQuota/quota-dev` **masih aktif**.
+- Sampah dari drill: Pod `test-noreq` (Running), Deployment `quota-test` + 11 Pod-nya (Running,
+  sengaja nyangkut di `11/20` karena kuota), Pod `polinux-stress` (`CrashLoopBackOff` permanen,
+  demo OOMKilled — akan terus retry selamanya kalau dibiarkan), Pod bare `nginx-demo` (sisa
+  Sesi 5a `pod-with-limit.yaml`).
+- Juga masih ada `podinfo`/`whoami` Deployment (3 replika masing-masing) dari sesi kubeadm
+  cross-cloud 2026-08-10 — ini bukan sampah, biarkan.
+- **Bersihkan `test-noreq`, `quota-test`, `polinux-stress`, `nginx-demo` (bare pod) dulu sebelum
+  mulai Modul 6** — HPA butuh Deployment `nginx-demo` yang bersih tanpa Pod lain berebut nama.
+  `LimitRange`/`ResourceQuota` boleh dibiarkan aktif, replika HPA (min 3 max 6) jauh dari
+  `pods: 20`.
+- metrics-server & ingress controller **belum diverifikasi ada** di cluster ini (beda dari RKE2
+  yang bawaannya sudah ada) — cek dulu sebelum Modul 6/7 (`kubectl get deployment -A | grep
+  metrics-server`, `kubectl get pods -A | grep ingress`), pasang manual kalau belum ada.
+
+**Cluster RKE2/Rancher** (context `local`, terakhir dipakai sampai Modul 4, 2026-08-10 dan
+sebelumnya) — state ini **belum diverifikasi ulang**, dicatat sebagai asumsi terakhir:
 - **StorageClass `local-path` terpasang permanen** (manifest: `pvc/local-path-provisioner.yaml`),
   sengaja **non-default** — PVC harus eksplisit `storageClassName: local-path`.
-- **Sisa drill Modul 4 kemungkinan masih jalan** di namespace `learning`: Deployment+Service
-  `nginx-demo` (readiness `/` sehat + liveness `/salah` rusak → `CrashLoopBackOff`).
-  **Bersihkan dulu sebelum mulai Modul 5** (`kubectl -n learning delete -f pod/pod-with-probe.yaml`
-  atau delete deployment/service `nginx-demo`).
-- `pod/pod-with-probe.yaml` di repo **sudah di-revert** ke kondisi asli (liveness ter-comment) —
+- Sisa drill Modul 4 kemungkinan masih jalan di namespace `learning`: Deployment+Service
+  `nginx-demo` (readiness `/` sehat + liveness `/salah` rusak → `CrashLoopBackOff`) — bersihkan
+  dulu kalau kembali ke cluster ini.
+- `pod/pod-with-probe.yaml` di repo sudah di-revert ke kondisi asli (liveness ter-comment) —
   tidak ada aksi git yang tertunda.
 
 ## Sesi tambahan (di luar silabus modul) — kubeadm cross-cloud lab, 2026-08-10
