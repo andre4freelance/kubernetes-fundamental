@@ -26,9 +26,18 @@ per sesi ±1 jam.
 
 ## Setup
 
-- **Cluster:** RKE2/Rancher, 1 master + 1 worker.
-- **Namespace kerja:** `learning` (semua latihan pakai `-n learning`).
-- **Kubeconfig:** file lokal per-perangkat (context `local`). Tidak disimpan di repo.
+- **Cluster: fleksibel per sesi** — repo ini tidak terikat ke satu cluster. Di awal tiap sesi
+  user menyebut cluster latihan yang dipakai, dan AI menyinkronkan pilihan itu ke config MCP
+  semua tool (protokol lengkap: `AGENTS.md` / `.claude/skills/k8s-belajar/SKILL.md`).
+  Cluster yang pernah dipakai (referensi, bukan default):
+  - **RKE2/Rancher** (1 master + 1 worker) — context `local`;
+  - **kubeadm cross-cloud lab** (1 master + 2 worker, Alibaba + Azure) — context `kubeadm-lab`.
+- **Namespace kerja:** `learning` (semua latihan pakai `-n learning`), sama di semua cluster.
+- **Kubeconfig:** file lokal per-perangkat, **satu file terisolasi per cluster** — tidak pernah
+  disimpan di repo, tidak pernah digabung ke `~/.kube/config` default (itu cluster production).
+- **Komponen cluster (StorageClass, metrics-server, ingress controller) itu per-cluster** —
+  status terpasangnya dicatat di bagian "Keadaan cluster saat ini" per cluster, jangan
+  diasumsikan ada hanya karena pernah dipasang di cluster lain.
 - **Konvensi penamaan:** pakai gaya production berbahasa Inggris (mis. `frontend`, `api`,
   `app-config`, `db-credentials`) supaya terbiasa dengan dunia nyata.
 
@@ -358,8 +367,9 @@ karena konsepnya generik, bukan spesifik cluster:
 ## Cara melanjutkan di perangkat lain
 1. `git pull` repo ini — instruksi tutor ikut terbawa: `AGENTS.md` (semua AI tool) +
    skill `k8s-belajar` (`.claude/skills/k8s-belajar/`, khusus Claude Code).
-2. Pastikan kubeconfig cluster `learning` tersedia di perangkat itu (context `local`);
-   path-nya per-mesin dan tidak disimpan di repo.
+2. Pastikan kubeconfig cluster latihan yang mau dipakai tersedia di perangkat itu (file
+   terisolasi per cluster); path-nya per-mesin dan tidak disimpan di repo. Sebutkan cluster
+   mana yang dipakai saat memulai sesi — AI akan menanyakannya kalau belum disebut.
 3. Buka AI tool pilihan di repo ini, minta **"lanjut belajar Kubernetes"**:
    - **Claude Code** → skill `k8s-belajar` terdeteksi otomatis;
    - **tool lain** (Codex, Gemini CLI, Cursor, dll.) → tool membaca `AGENTS.md`.

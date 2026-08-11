@@ -9,6 +9,13 @@ Prinsip lintas modul (dari [Configuration Best Practices](https://kubernetes.io/
 manifest deklaratif di git, `apply` bukan perintah imperatif, label selalu dipakai, satu objek
 per file boleh digabung kalau satu kesatuan aplikasi, jangan pakai `latest` di production.
 
+**Cluster latihan fleksibel per sesi** — silabus ini tidak mengasumsikan cluster tertentu.
+Prasyarat berupa komponen cluster (StorageClass/provisioner, metrics-server, ingress
+controller) itu **per-cluster**: verifikasi dulu ada/tidaknya di cluster yang dipakai sesi ini
+(status per cluster dicatat di `LEARNING.md` bagian "Keadaan cluster saat ini"), pasang manual
+kalau belum ada. Catatan "sudah dikerjakan/terpasang" di file ini merujuk ke cluster tempat
+modul itu dulu dikerjakan — bukan jaminan untuk cluster lain.
+
 ---
 
 ## Modul 0 — Baseline & Orientasi ✅ (selesai)
@@ -82,19 +89,22 @@ base64 ≠ enkripsi; menyelesaikan drill `CreateContainerConfigError` < 10 menit
 [local-path-provisioner](https://github.com/rancher/local-path-provisioner)
 
 ### Sesi 3a — Kenapa PVC Pending (belajar dari kegagalan yang disengaja)
-1. Cluster ini **awalnya tidak punya StorageClass** *(sekarang sudah ada `local-path`,
-   non-default — dipasang di Sesi 3b)* — apply `pvc.yaml` dan amati `Pending`.
+1. Cluster tanpa StorageClass default *(di cluster RKE2 tempat modul ini dikerjakan, kini ada
+   `local-path` non-default — dipasang di Sesi 3b; cluster lain: cek `kubectl get storageclass`
+   dulu)* — apply `pvc.yaml` dan amati `Pending`.
    `describe` → "no storage class is set". Ini bukan bug; ini pelajaran rantai
    PVC → StorageClass → provisioner → PV.
 2. Bedakan static provisioning (admin bikin PV manual) vs dynamic (StorageClass + provisioner).
 
 ### Sesi 3b — Pasang provisioner & pakai storage
-1. Install `local-path-provisioner` (proyek Rancher, cocok dengan RKE2) — latihan admin
-   pertama di luar namespace `learning`; jelaskan dulu apa yang di-apply dan ke mana.
-   *(Sudah dikerjakan: manifest tersimpan di `pvc/local-path-provisioner.yaml`, StorageClass
-   dibiarkan **non-default** — keputusan: PVC menyebut `storageClassName: local-path`
-   **eksplisit** (explicit > implicit). Ingat: `storageClassName` immutable → salah kelas =
-   delete + recreate PVC.)*
+1. Install provisioner kalau cluster belum punya — `local-path-provisioner` (proyek Rancher,
+   jalan di cluster mana pun yang node-nya punya disk lokal) — latihan admin pertama di luar
+   namespace `learning`; jelaskan dulu apa yang di-apply dan ke mana.
+   *(Sudah dikerjakan **di cluster RKE2**: manifest tersimpan di
+   `pvc/local-path-provisioner.yaml`, StorageClass dibiarkan **non-default** — keputusan: PVC
+   menyebut `storageClassName: local-path` **eksplisit** (explicit > implicit). Ingat:
+   `storageClassName` immutable → salah kelas = delete + recreate PVC. Cluster lain: apply
+   manifest yang sama kalau perlu.)*
 2. PVC bind → jalankan `pod-with-pvc.yaml`, tulis file ke volume, **hapus Pod, buat lagi,
    buktikan data selamat** (inti "persistent").
 3. Konsep: `accessModes` (kenapa RWO paling umum; RWX butuh storage jaringan),
@@ -142,7 +152,7 @@ pada Pod, Service endpoint, dan restart count". Plus drill: Pod Ready 0/1, temuk
 
 ---
 
-## Modul 5 — Resource Management & Tata Kelola Namespace
+## Modul 5 — Resource Management & Tata Kelola Namespace ✅ (selesai — lulus checkpoint; recap di `LEARNING.md`)
 
 **File repo:** `pod/pod-with-limit.yaml`, `limitrange/limitrange.yaml`,
 `resourcequota/resourcequota.yaml`.
@@ -180,9 +190,13 @@ kenapa Pod baru tertolak quota padahal quota belum penuh (hint: Pod tanpa reques
 ## Modul 6 — Autoscaling: HPA
 
 **File repo:** `hpa/hpa.yaml` (CPU 70% + memory 75%, min 3 max 6, target Deployment
-`nginx-demo`). Prasyarat: metrics-server ✅ sudah ada di RKE2 (`rke2-metrics-server`);
-Deployment `nginx-demo` **harus punya `resources.requests`** — hubungkan dengan Modul 5,
-karena `averageUtilization` dihitung sebagai % dari requests.
+`nginx-demo`). Prasyarat: **metrics-server terpasang di cluster yang dipakai** — verifikasi
+dulu (`kubectl get deployment -A | grep metrics-server`); di RKE2 sudah bawaan
+(`rke2-metrics-server`), di cluster kubeadm/lainnya biasanya harus dipasang manual
+([metrics-server](https://github.com/kubernetes-sigs/metrics-server) — di lab self-managed
+sering perlu flag `--kubelet-insecure-tls`). Deployment `nginx-demo` **harus punya
+`resources.requests`** — hubungkan dengan Modul 5, karena `averageUtilization` dihitung
+sebagai % dari requests.
 
 **Dokumentasi:**
 [HPA](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) ·
@@ -208,7 +222,11 @@ requests, dan kenapa scale-in tidak langsung.
 
 **File repo:** `service/service.yaml` (ClusterIP 8080→80), `service-nodeport.yaml`,
 `service-loadbalancer.yaml`, `ingress/ingress.yaml` (host `example.com` → Service
-`nginx-demo:8080`). Prasyarat: ingress controller ✅ sudah ada (`rke2-ingress-nginx`).
+`nginx-demo:8080`). Prasyarat: **ingress controller terpasang di cluster yang dipakai** —
+verifikasi dulu (`kubectl get pods -A | grep -i ingress`); di RKE2 sudah bawaan
+(`rke2-ingress-nginx`), di cluster kubeadm/lainnya pasang manual (mis.
+[ingress-nginx](https://kubernetes.github.io/ingress-nginx/deploy/) — pilih manifest
+bare-metal/NodePort untuk lab tanpa cloud LB).
 
 **Dokumentasi:**
 [Service](https://kubernetes.io/docs/concepts/services-networking/service/) ·
