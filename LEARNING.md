@@ -20,7 +20,7 @@ per sesi ±1 jam.
 | 3 | Storage: PVC/PV/StorageClass (pasang local-path-provisioner, bukti data persisten) | `pvc/`, `pod/pod-with-pvc` | ✅ |
 | 4 | Health check & self-healing: ReplicaSet ownership, readiness vs liveness vs startup | `replicaset/`, `pod/pod-with-probe` | ✅ |
 | 5 | Resource management: requests/limits, QoS, OOMKilled, LimitRange, ResourceQuota | `pod/pod-with-limit`, `limitrange/`, `resourcequota/` | ✅ |
-| 6 | Autoscaling: HPA + load test (metrics-server sudah ada di RKE2) | `hpa/` | ⬜ |
+| 6 | Autoscaling: HPA + load test (metrics-server sudah ada di RKE2) | `hpa/` | ✅ |
 | 7 | Expose: 3 tipe Service + Ingress host/path routing (ingress-nginx sudah ada) | `service/`, `ingress/` | ⬜ |
 | 8 | **Capstone:** deploy production-style dari nol + drill troubleshooting (ujian akhir) | `capstone/` (ditulis user) | ⬜ |
 
@@ -290,10 +290,68 @@ tanya cluster tiap sesi, sync ke `.mcp.json`/`opencode.json`, jangan pernah asum
   production: **satu namespace tim = LimitRange + ResourceQuota sepasang** (Quota doang bikin
   developer frustrasi lupa isi resources; LimitRange doang nggak nyegah satu tim habisin cluster).
 
-**⏭️ Berikutnya — Modul 6: Autoscaling (HPA)** (`hpa/hpa.yaml`). Target: pastikan Deployment
-`nginx-demo` punya `resources.requests` (nyambung dari Modul 5 — `averageUtilization` dihitung
-dari requests), apply HPA, bangkitkan beban lihat scale-out, lalu amati scale-in yang sengaja
-lambat (stabilization window 5 menit).
+### ✅ Modul 6 — Autoscaling (HPA) — LULUS checkpoint
+
+Dikerjakan di cluster **kubeadm-lab**, 2026-08-12.
+
+**Prasyarat — metrics-server tidak bawaan di kubeadm-lab (beda dari RKE2):**
+- Install manifest resmi → Pod `Running` tapi `0/1`, `kubectl top nodes` gagal. Log:
+  `x509: cannot validate certificate for <IP> because it doesn't contain any IP SANs`.
+- **Sama pola dengan insiden SAN apiserver session sebelumnya, tapi beda sertifikat:** ini
+  kubelet serving cert (self-signed per-node, default cuma hostname SAN), bukan apiserver cert
+  — jadi fix `kubeadm init phase certs apiserver` **tidak berlaku** di sini (tidak ada satu cert
+  terpusat untuk diregenerate, tiap node punya sendiri). Fix yang dipakai: patch args
+  `--kubelet-insecure-tls` ke Deployment `metrics-server` (cuma melemahkan verifikasi TLS
+  metrics-server→kubelet buat scrape metrics, bukan auth/otorisasi apapun — beda dari
+  `insecure-skip-tls-verify` di client kubectl yang dulu sengaja dihindari). Detail lengkap +
+  command: `knowledge/runbooks/kubernetes-cross-cloud-kubeadm-flannel-over-tunnel.md`.
+
+**Inti — cara kerja HPA:**
+- **Rumus `TARGETS`:** `averageUtilization% = (rata-rata usage aktual dari metrics-server) ÷
+  (resources.requests) × 100`. Requests itu penyebut tetap; usage aktual itu pembilang yang
+  bergerak. Makanya HPA **wajib** Deployment target punya `resources.requests` (nyambung Modul 5).
+- **DRILL bangkitkan beban — 2 kegagalan berturut sebelum berhasil, masing-masing pelajaran:**
+  1. Luka YAML lagi: `resources:` ditulis sejajar dengan `- name: nginx` (item list container),
+     bukan sejajar `image`/`ports` (field di dalam item container) → `did not find expected '-'
+     indicator`. Aturan: semua field satu container harus sejajar satu sama lain, satu level
+     lebih dalam dari key `containers:` yang menaunginya.
+  2. 1 Pod busybox loop `wget` sekuensial tanpa jeda → CPU mentok ~6-7%, tidak naik. Sebab:
+     `wget` sekuensial = satu request tunggu selesai baru request berikutnya; Service
+     load-balance **per-koneksi** (Modul 1) membagi beban kecil itu rata ke 3 Pod → tiap Pod
+     nyaris nganggur. Fix: banyak **proses** paralel (loop di-background, `&`) **dan** banyak
+     **Pod** generator sekaligus (1 Pod paralel mentok ~24% karena client-nya sendiri jadi
+     bottleneck) — baru dengan 3 Pod × 30 loop paralel CPU tembus 70%+.
+- **Formula scale-out dibuktikan langsung:** `desiredReplicas = ceil(currentReplicas ×
+  currentMetric/target)`. Replicas 3, CPU terbaca ~73% saat scale terjadi, target 70% →
+  `ceil(3 × 73/70) = ceil(3.13) = 4` — persis yang terjadi (bukan langsung lompat ke `maxReplicas`
+  6). Setelah naik ke 4, beban total yang sama terbagi ke Pod lebih banyak → % per Pod turun →
+  cukup stabil di 4, tidak lanjut naik (karena generator tidak ditambah lagi).
+- **Scale-out cepat, scale-in sengaja lambat:** begitu beban dihapus, `TARGETS` turun ke 0%
+  dalam hitungan detik, tapi `REPLICAS` bertahan di 4 selama **~5 menit** (stabilization window
+  default) sebelum turun ke `minReplicas` 3 — HPA pakai nilai **tertinggi** dalam window 5 menit
+  terakhir untuk keputusan scale-in, bukan nilai sesaat. Alasan production: mencegah *flapping*
+  (Pod baru butuh waktu Ready — kalau keburu di-scale-in lalu naik lagi, user kena latency/error
+  saat trafik naik-turun cepat, mis. jam sibuk).
+- **Konflik `replicas:` Deployment vs HPA:** keduanya menulis ke field **yang sama persis**
+  (`Deployment.spec.replicas`) lewat jalur berbeda — `kubectl apply` menulis langsung, HPA
+  menulis lewat **Scale subresource** tiap sync (~15 detik). Re-apply manifest yang masih
+  hardcode `replicas: 3` sambil HPA aktif → replicas sempat balik ke 3, lalu ditarik lagi oleh
+  HPA di siklus berikutnya (dibuktikan minta user coba live). `minReplicas`/`maxReplicas` HPA
+  cuma batas atas-bawah, bukan yang "menimpa" — nilai aktualnya hasil kalkulasi formula di atas,
+  bisa berapa saja di antara keduanya (kasus ini: 4). Best practice: **hapus field `replicas:`
+  dari manifest Deployment yang sudah di-HPA-kan**, biar HPA satu-satunya penulis field itu —
+  belum diterapkan ke `deployment/deployment.yaml` di repo ini (masih `replicas: 3` tertulis),
+  jadi kalau file itu di-reapply nanti selagi HPA aktif, tarik-tambangnya akan terulang.
+
+**Checkpoint:** user menjelaskan rumus `TARGETS`, kenapa HPA butuh `requests`, dan kenapa
+scale-in tidak langsung — lulus dengan 2 koreksi kecil (rumus butuh usage aktual bukan cuma
+requests; `min`/`max` itu batas bukan penimpa langsung).
+
+**⏭️ Berikutnya — Modul 7: Expose (3 tipe Service + Ingress)** (`service/`, `ingress/`).
+Prasyarat: ingress controller — verifikasi dulu ada/tidak di cluster yang dipakai sesi itu
+(`kubectl get pods -A | grep -i ingress`); di kubeadm-lab kemungkinan besar **belum ada**
+(pola sama seperti metrics-server tadi, cluster ini bare-metal self-managed) — pasang manual
+kalau perlu (`ingress-nginx`, manifest bare-metal/NodePort).
 
 ## Keadaan cluster saat ini (verifikasi di awal sesi berikutnya)
 
@@ -301,22 +359,28 @@ Cluster latihan itu **fleksibel per sesi** sejak 2026-08-11 (lihat protokol di `
 `.claude/skills/k8s-belajar/`) — state di bawah dipisah per cluster, jangan diasumsikan cluster
 yang sama dipakai lagi.
 
-**Cluster `kubeadm-lab`** (context `kubeadm-lab`, dipakai sesi Modul 5, 2026-08-11) — namespace
-`learning` **BELUM dibersihkan**, ada di akhir sesi:
-- `LimitRange/default-limit` + `ResourceQuota/quota-dev` **masih aktif**.
-- Sampah dari drill: Pod `test-noreq` (Running), Deployment `quota-test` + 11 Pod-nya (Running,
-  sengaja nyangkut di `11/20` karena kuota), Pod `polinux-stress` (`CrashLoopBackOff` permanen,
-  demo OOMKilled — akan terus retry selamanya kalau dibiarkan), Pod bare `nginx-demo` (sisa
-  Sesi 5a `pod-with-limit.yaml`).
+**Cluster `kubeadm-lab`** (context `kubeadm-lab`, dipakai sesi Modul 6, 2026-08-12) — namespace
+`learning` **bersih** di akhir sesi:
+- `LimitRange/default-limit` + `ResourceQuota/quota-dev` (dari Modul 5) **masih aktif** — dibiarkan,
+  tidak mengganggu (replika HPA min 3 max 6 jauh dari `pods: 20`).
+- Sampah drill Modul 5 (`test-noreq`, `quota-test`, `polinux-stress`, bare pod `nginx-demo`) **sudah
+  dihapus**. Sampah drill Modul 6 (`load-generator`, `load-generator-2`, `load-generator-3`) **sudah
+  dihapus**.
+- **metrics-server terpasang** (`kube-system`, patched dengan `--kubelet-insecure-tls` — lihat
+  `knowledge/runbooks/kubernetes-cross-cloud-kubeadm-flannel-over-tunnel.md`). `kubectl top nodes`
+  berfungsi.
+- Aktif dari Modul 6, dibiarkan untuk lanjut/referensi sesi berikutnya: Deployment `nginx-demo`
+  (3 replika, `resources.requests` 50m/128Mi + `limits` 100m/256Mi), Service `nginx-demo`
+  (ClusterIP 8080→80), HPA `nginx-demo` (min 3 max 6, CPU 70%/memory 75%).
+- **Utang teknis kecil:** `deployment/deployment.yaml` di git masih punya field `replicas: 3`
+  hardcode — anti-pattern yang dibahas sendiri di sesi ini (konflik nulis field dengan HPA kalau
+  file ini di-reapply). Belum diputuskan/dihapus — putuskan di sesi berikutnya (hapus field itu,
+  atau biarkan sebagai bahan drill "tarik-tambang" kalau mau didemokan lagi).
 - Juga masih ada `podinfo`/`whoami` Deployment (3 replika masing-masing) dari sesi kubeadm
   cross-cloud 2026-08-10 — ini bukan sampah, biarkan.
-- **Bersihkan `test-noreq`, `quota-test`, `polinux-stress`, `nginx-demo` (bare pod) dulu sebelum
-  mulai Modul 6** — HPA butuh Deployment `nginx-demo` yang bersih tanpa Pod lain berebut nama.
-  `LimitRange`/`ResourceQuota` boleh dibiarkan aktif, replika HPA (min 3 max 6) jauh dari
-  `pods: 20`.
-- metrics-server & ingress controller **belum diverifikasi ada** di cluster ini (beda dari RKE2
-  yang bawaannya sudah ada) — cek dulu sebelum Modul 6/7 (`kubectl get deployment -A | grep
-  metrics-server`, `kubectl get pods -A | grep ingress`), pasang manual kalau belum ada.
+- Ingress controller **belum diverifikasi ada** di cluster ini — cek dulu sebelum Modul 7
+  (`kubectl get pods -A | grep -i ingress`), pasang manual kalau belum ada (pola sama seperti
+  metrics-server: cluster ini bare-metal self-managed, tidak ada yang bawaan seperti di RKE2).
 
 **Cluster RKE2/Rancher** (context `local`, terakhir dipakai sampai Modul 4, 2026-08-10 dan
 sebelumnya) — state ini **belum diverifikasi ulang**, dicatat sebagai asumsi terakhir:
