@@ -3,11 +3,19 @@ kind: Ingress
 metadata:
   name: nginx-demo
 spec:
+  ingressClassName: nginx
   rules:
   - host: example.com
     http:
       paths:
       - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-demo
+            port:
+              number: 8080
+      - path: /app
         pathType: Prefix
         backend:
           service:

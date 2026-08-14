@@ -21,7 +21,7 @@ per sesi ±1 jam.
 | 4 | Health check & self-healing: ReplicaSet ownership, readiness vs liveness vs startup | `replicaset/`, `pod/pod-with-probe` | ✅ |
 | 5 | Resource management: requests/limits, QoS, OOMKilled, LimitRange, ResourceQuota | `pod/pod-with-limit`, `limitrange/`, `resourcequota/` | ✅ |
 | 6 | Autoscaling: HPA + load test (metrics-server sudah ada di RKE2) | `hpa/` | ✅ |
-| 7 | Expose: 3 tipe Service + Ingress host/path routing (ingress-nginx sudah ada) | `service/`, `ingress/` | ⬜ |
+| 7 | Expose: 3 tipe Service + Ingress host/path routing | `service/`, `ingress/` | 🔶 sisa TLS + gambar alur |
 | 8 | **Capstone:** deploy production-style dari nol + drill troubleshooting (ujian akhir) | `capstone/` (ditulis user) | ⬜ |
 
 ## Setup
@@ -347,11 +347,111 @@ Dikerjakan di cluster **kubeadm-lab**, 2026-08-12.
 scale-in tidak langsung — lulus dengan 2 koreksi kecil (rumus butuh usage aktual bukan cuma
 requests; `min`/`max` itu batas bukan penimpa langsung).
 
-**⏭️ Berikutnya — Modul 7: Expose (3 tipe Service + Ingress)** (`service/`, `ingress/`).
-Prasyarat: ingress controller — verifikasi dulu ada/tidak di cluster yang dipakai sesi itu
-(`kubectl get pods -A | grep -i ingress`); di kubeadm-lab kemungkinan besar **belum ada**
-(pola sama seperti metrics-server tadi, cluster ini bare-metal self-managed) — pasang manual
-kalau perlu (`ingress-nginx`, manifest bare-metal/NodePort).
+### Modul 7 — Expose: 3 tipe Service & Ingress (2026-08-14, cluster `kubeadm-lab`) 🔶
+
+Sesi terpanjang sejauh ini (~9 jam). Menyimpang jauh lebih dalam dari silabus, terutama ke
+level iptables — dan justru di situ nilainya.
+
+**Tiga tipe Service ternyata bertingkat, bukan sejajar.** `LoadBalancer` yang di-apply di
+cluster bare-metal **otomatis mendapat NodePort** (`PORT(S)` berubah `8080/TCP` → `8080:31032/TCP`),
+dan NodePort sendiri tetap memakai ClusterIP di bawahnya. Jadi ClusterIP ⊂ NodePort ⊂ LoadBalancer.
+`EXTERNAL-IP` `<pending>` **selamanya** karena tidak ada cloud-controller-manager terpasang —
+`Events: <none>`, bukan error. Beda penting untuk troubleshooting: CCM ada tapi gagal → muncul
+event `SyncLoadBalancerFailed`; CCM tidak ada → sunyi total. Lokasi VM di cloud tidak relevan;
+yang menentukan cuma apakah CCM terpasang.
+
+**ClusterIP = IP yang tidak dimiliki siapa pun.** Tidak ada NIC yang memilikinya, tidak ada yang
+listen, tidak pernah keluar node — cuma pola pencocokan di netfilter yang ditulis kube-proxy di
+**setiap** node. User membacanya langsung di `iptables-save`:
+- `-A KUBE-NODEPORTS -p tcp --dport 31032 -j KUBE-EXT-…` **tanpa `-d`** → itulah sebabnya node
+  yang nol Pod tetap melayani NodePort. Node jadi pintu masuk, bukan penyedia.
+- Probabilitas `KUBE-SVC` untuk 3 endpoint bukan 0.33/0.33/0.33 tapi **0.33 → 0.5 → sisa**, karena
+  rantainya berurutan: tiap aturan hanya melihat paket yang lolos dari aturan sebelumnya.
+- `KUBE-MARK-MASQ` ada supaya paket balasan pulang lewat node yang sama.
+
+**`externalTrafficPolicy` dibuktikan hidup-hidup.** Diubah ke `Local` → akses via master (0 Pod)
+mati **timeout** (DROP, bukan RST — refleks: *refused* = cek aplikasi, *timeout* = cek jalur),
+worker & worker-2 tetap 200. Log nginx berubah dari IP flannel tiap node (`172.20.x.x`) jadi
+`10.151.74.239` (CHR) — itu imbalannya: IP client asli terlihat. Muncul juga
+`HealthCheck NodePort: 30960` yang menjawab **503 di node tanpa Pod, 200 di node ber-Pod** —
+mekanisme LB production membuang node kosong dari rotasi. `Local` aman di production justru
+karena health check itu dibaca; di lab dengan NAT statis tidak ada yang membacanya → master jadi
+lubang hitam.
+
+**Ingress = L7, dan itu bedanya dari semua di atas.** Service hanya bisa mencocokkan IP:port;
+nama host ada di *dalam* payload HTTP. Ingress controller adalah proxy HTTP sungguhan yang membaca
+header `Host:` — makanya satu IP+port melayani banyak domain, dan pengujian cukup dengan
+`curl -H "Host: …"` **tanpa DNS sama sekali**.
+
+**Tiga bentuk kegagalan Ingress yang dialami berturut-turut** (ini inti troubleshooting-nya):
+
+| Gejala | Arti | Dialami saat |
+|---|---|---|
+| 404 dari controller (`text/plain`) | Tidak ada rule yang cocok | `ingressClassName` lupa ditulis |
+| 503 dari controller | Rule cocok, backend tanpa endpoint sehat | Ingress ter-apply ke namespace `default` |
+| 404 dari aplikasi (`text/html` nginx) | Routing **berhasil**, aplikasi tidak punya path itu | `/app` tanpa `rewrite-target` |
+
+- **`ingressClassName` hilang** → `Address` kosong + `Ingress Class: <none>` + `Events: <none>`.
+  Bentuk kegagalan **identik dengan LoadBalancer `<pending>`**: objek valid di etcd, tidak ada
+  controller yang merasa itu tugasnya. Diabaikan, bukan ditolak. IngressClass `nginx` ada tapi
+  **tidak ditandai default**, jadi harus eksplisit.
+- **Salah namespace** → 503. `backend.service.name` selalu berarti "Service di namespace yang sama
+  dengan Ingress"; tidak ada field untuk lintas namespace, dan itu **disengaja sebagai batas
+  keamanan** (tanpa itu, siapa pun bisa mengekspos Service internal tim lain). Konsekuensinya:
+  pola production yang benar adalah satu Ingress per tim di namespace masing-masing, bukan satu
+  objek raksasa.
+- **`/app` 404 dari nginx** → Ingress meneruskan path **apa adanya**. Memotong prefix butuh
+  `use-regex` + `rewrite-target: /$2` + `path: /app(/|$)(.*)` + `pathType: ImplementationSpecific`
+  (regex bukan bagian spec Ingress standar). Dicatat sebagai jalan pintas yang sering bikin bug —
+  link/redirect absolut aplikasi tetap patah; solusi benar biasanya bikin aplikasi sadar base path.
+
+**Ingress tidak butuh Service NodePort.** Dibuktikan user tanpa diminta lewat output `whoami`:
+`RemoteAddr: 172.20.1.37` = IP Pod controller. Controller berjalan **di dalam** cluster dan
+memakai ClusterIP seperti Pod biasa. NodePort yang menempel di Service yang sudah di-Ingress-kan =
+pintu belakang yang melewati TLS/auth Ingress.
+
+**Kesalahan menarik yang dibuat user:**
+- Bilang Service yang di-apply ulang dengan `type` berbeda itu "diganti" — dibuktikan salah lewat
+  UID + `creationTimestamp` + ClusterIP yang tidak berubah: **di-patch in-place**. Penting karena
+  delete+recreate akan mengubah ClusterIP dan memutus yang sudah cache DNS.
+- Mengira master menjawab 200 "karena LoadBalancer default pakai IP master" — padahal tidak ada LB
+  sama sekali; yang bekerja bagian NodePort-nya.
+- Menulis `ingressClassName` **dua kali** dalam satu `spec` dan diisi nama aplikasi
+  (`whoami`/`podinfo`). Dua koreksi: `rules` itu **list** (tambah item `-`, jangan ulang kunci),
+  dan `ingressClassName` menjawab "controller mana", bukan "aplikasi mana" — satu per objek.
+- Lupa `-n learning` saat apply → objek mendarat di `default`. Diajarkan `--dry-run=server`
+  (validasi penuh oleh API server, menangkap yang tidak dilihat editor) + kebiasaan `get` setelah
+  apply untuk memastikan objek ada di tempat yang dikira.
+
+**Prediksi user yang benar:** node kosong karena baru Ready belakangan (dikonfirmasi:
+`k8s-worker` Ready `01:50Z`, Pod dibuat `01:45Z`), dan controller akan mendarat di worker karena
+master ter-taint. Koreksi: `k8s-master` kosong karena alasan **berbeda** — taint
+`node-role.kubernetes.io/control-plane`, permanen, bukan kebetulan timing. Juga ditegaskan
+Kubernetes **tidak pernah memindahkan Pod yang sudah jalan** untuk menyeimbangkan beban; node baru
+menganggur sampai ada Pod baru.
+
+**Detour infrastruktur (bukan materi modul, tapi hasil nyata):** lihat bagian "Keadaan cluster"
+untuk Service CIDR dan rule NAT CHR yang ditambahkan.
+
+**Checkpoint:** ⚠️ **belum diambil.** Tiga pertanyaan teori belum dijawab user — (1) nama
+cloud-controller-manager, (2) merumuskan sendiri hubungan ClusterIP→NodePort→LoadBalancer dalam
+satu kalimat, (3) kapan `nodePort:` aman di-hardcode vs berbahaya (petunjuk: cluster multi-tim,
+tabrakan alokasi). Plus pertanyaan checkpoint resmi MODULES.md: memilih tipe expose yang tepat
+untuk 3 skenario (internal service-to-service, debugging cepat, production web publik). **Ambil
+checkpoint ini di awal sesi berikutnya sebelum menandai Modul 7 ✅.**
+
+**⏭️ Berikutnya — sisa Modul 7, lalu checkpoint:**
+1. **TLS/HTTPS di Ingress** — `spec.tls`, TLS termination berhenti di controller (Pod tetap HTTP),
+   self-signed cert cukup. Port 443 controller = NodePort `32024`, **NAT CHR-nya belum dibuat**.
+2. **Gambar alur lengkap** sebagai sintesis: laptop → CHR (dst-nat + hairpin src-nat) → NodePort
+   worker-2 → kube-proxy → Pod controller di worker → ClusterIP Service → Pod aplikasi. User sudah
+   melihat tiap potongannya terpisah; menyatukannya jadi satu gambar adalah pengujian pemahaman
+   terbaik.
+3. Ambil checkpoint di atas → tandai Modul 7 ✅ → lanjut Modul 8 (Capstone).
+
+Topik tambahan yang diminati user (di luar silabus, relevan interview): Gateway API sebagai
+penerus Ingress, `pathType` lengkap + aturan prioritas, dan bedah `nginx.conf` yang dihasilkan
+controller (`kubectl exec` ke Pod controller) — pelengkap yang bagus setelah membaca iptables.
 
 ## Keadaan cluster saat ini (verifikasi di awal sesi berikutnya)
 
@@ -359,8 +459,42 @@ Cluster latihan itu **fleksibel per sesi** sejak 2026-08-11 (lihat protokol di `
 `.claude/skills/k8s-belajar/`) — state di bawah dipisah per cluster, jangan diasumsikan cluster
 yang sama dipakai lagi.
 
-**Cluster `kubeadm-lab`** (context `kubeadm-lab`, dipakai sesi Modul 6, 2026-08-12) — namespace
-`learning` **bersih** di akhir sesi:
+**Cluster `kubeadm-lab`** (context `kubeadm-lab`, terakhir dipakai sesi Modul 7, 2026-08-14).
+
+Ditambahkan/berubah di sesi Modul 7 — **verifikasi ini dulu kalau kembali ke cluster ini:**
+- **3 node**, semua Ready v1.36.3: `k8s-master` (10.151.74.240, ter-taint control-plane),
+  `k8s-worker-2` (10.151.74.241, Aliyun), `k8s-worker` (10.126.65.5, Azure lewat tunnel).
+- **ingress-nginx `controller-v1.15.1` terpasang** (varian bare-metal, namespace `ingress-nginx`),
+  Service NodePort **80→32353, 443→32024**. Catatan: matrix CI versi ini diuji sampai k8s v1.35.1
+  sedangkan cluster ini v1.36.3 — satu minor di depan, tersangka pertama kalau ada perilaku aneh.
+  IngressClass `nginx` ada tapi **tidak ditandai default** → tiap Ingress wajib
+  `ingressClassName: nginx`.
+- Aktif di namespace `learning`: Ingress `nginx-demo` (host `example.com` → `nginx-demo:8080`) dan
+  Ingress `nginx-multihost` (`whoami.local` → `whoami:80`, `podinfo.local` → `podinfo:80`).
+- Service `nginx-demo` sekarang **`type: LoadBalancer`** (`EXTERNAL-IP` `<pending>` permanen — tidak
+  ada CCM, dibiarkan sebagai bahan ajar), NodePort **31032**, `externalTrafficPolicy` sudah
+  dikembalikan ke `Cluster`. ⚠️ `service/service-loadbalancer.yaml` **tidak** mencantumkan
+  `nodePort: 31032` — saat revert `externalTrafficPolicy`, pin-nya ikut terhapus. Nomor 31032 masih
+  bertahan di cluster (alokasi tidak dilepas oleh `apply`), tapi kalau Service ini dihapus dan
+  dibuat ulang, nomornya berubah dan rule CHR `20932`–`20934` jadi basi. Putuskan di sesi
+  berikutnya: pin di manifest, atau terima sebagai konsekuensi lab.
+- **Service CIDR = `10.96.0.0/12`, dikonfirmasi tidak bentrok** dengan jaringan user (node di
+  10.151.74.x / 10.126.65.x; rentangnya cuma 10.96.0.0–10.111.255.255). Sempat dibahas mau
+  dipindah ke 172.31.x — **tidak jadi**, karena tidak ada bentrokan nyata dan Service CIDR tidak
+  bisa diubah in-place. Untuk cluster **baru**: tanyakan CIDR dulu, sarankan `100.64.0.0/10`
+  (RFC 6598), hindari `172.31.0.0/16` (default VPC AWS). Detail:
+  `ai-ops/knowledge/runbooks/kubernetes-cross-cloud-kubeadm-flannel-over-tunnel.md`.
+- **Rule NAT baru di MikroTik CHR** (akses latihan dari internet; port publik harus di dalam
+  **20000–20999**, itu satu-satunya rentang yang dibuka security group Aliyun):
+  `20932`→master:31032, `20933`→worker-2:31032, `20934`→worker(Azure):31032,
+  `20880`→worker-2:32353 (ingress HTTP). Semua bisa dihapus dengan
+  `/ip firewall nat remove [find comment~"nginx-demo"]` dan `…comment~"ingress-nginx"`.
+  NAT untuk HTTPS ingress (32024) **belum dibuat** — perlu untuk sesi TLS.
+- **Nomor NodePort bersifat alokasi otomatis**: kalau Service dihapus/dibuat ulang, nomornya
+  berubah dan rule CHR jadi basi. `nginx-demo` sudah dipin (`nodePort: 31032`);
+  `ingress-nginx-controller` **belum**.
+
+State lama dari sesi Modul 6 (masih berlaku):
 - `LimitRange/default-limit` + `ResourceQuota/quota-dev` (dari Modul 5) **masih aktif** — dibiarkan,
   tidak mengganggu (replika HPA min 3 max 6 jauh dari `pods: 20`).
 - Sampah drill Modul 5 (`test-noreq`, `quota-test`, `polinux-stress`, bare pod `nginx-demo`) **sudah
@@ -378,9 +512,10 @@ yang sama dipakai lagi.
   atau biarkan sebagai bahan drill "tarik-tambang" kalau mau didemokan lagi).
 - Juga masih ada `podinfo`/`whoami` Deployment (3 replika masing-masing) dari sesi kubeadm
   cross-cloud 2026-08-10 — ini bukan sampah, biarkan.
-- Ingress controller **belum diverifikasi ada** di cluster ini — cek dulu sebelum Modul 7
-  (`kubectl get pods -A | grep -i ingress`), pasang manual kalau belum ada (pola sama seperti
-  metrics-server: cluster ini bare-metal self-managed, tidak ada yang bawaan seperti di RKE2).
+- Ingress controller: **sudah dipasang di sesi Modul 7** (lihat daftar di atas). Dugaan sesi
+  sebelumnya terbukti — cluster bare-metal self-managed tidak membawa apa pun, sama seperti
+  metrics-server. Manifest pihak ketiga disimpan di `~/ai-ops/workspace/` (disposable), bukan di
+  repo ini.
 
 **Cluster RKE2/Rancher** (context `local`, terakhir dipakai sampai Modul 4, 2026-08-10 dan
 sebelumnya) — state ini **belum diverifikasi ulang**, dicatat sebagai asumsi terakhir:
