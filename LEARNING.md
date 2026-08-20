@@ -21,7 +21,7 @@ per sesi ±1 jam.
 | 4 | Health check & self-healing: ReplicaSet ownership, readiness vs liveness vs startup | `replicaset/`, `pod/pod-with-probe` | ✅ |
 | 5 | Resource management: requests/limits, QoS, OOMKilled, LimitRange, ResourceQuota | `pod/pod-with-limit`, `limitrange/`, `resourcequota/` | ✅ |
 | 6 | Autoscaling: HPA + load test (metrics-server sudah ada di RKE2) | `hpa/` | ✅ |
-| 7 | Expose: 3 tipe Service + Ingress host/path routing | `service/`, `ingress/` | 🔶 sisa TLS + gambar alur |
+| 7 | Expose: 3 tipe Service + Ingress host/path routing + TLS | `service/`, `ingress/` | ✅ |
 | 8 | **Capstone:** deploy production-style dari nol + drill troubleshooting (ujian akhir) | `capstone/` (ditulis user) | ⬜ |
 
 ## Setup
@@ -433,21 +433,105 @@ menganggur sampai ada Pod baru.
 **Detour infrastruktur (bukan materi modul, tapi hasil nyata):** lihat bagian "Keadaan cluster"
 untuk Service CIDR dan rule NAT CHR yang ditambahkan.
 
-**Checkpoint:** ⚠️ **belum diambil.** Tiga pertanyaan teori belum dijawab user — (1) nama
-cloud-controller-manager, (2) merumuskan sendiri hubungan ClusterIP→NodePort→LoadBalancer dalam
-satu kalimat, (3) kapan `nodePort:` aman di-hardcode vs berbahaya (petunjuk: cluster multi-tim,
-tabrakan alokasi). Plus pertanyaan checkpoint resmi MODULES.md: memilih tipe expose yang tepat
-untuk 3 skenario (internal service-to-service, debugging cepat, production web publik). **Ambil
-checkpoint ini di awal sesi berikutnya sebelum menandai Modul 7 ✅.**
+**Checkpoint:** diambil di sesi 2026-08-19 (lihat di bawah).
 
-**⏭️ Berikutnya — sisa Modul 7, lalu checkpoint:**
-1. **TLS/HTTPS di Ingress** — `spec.tls`, TLS termination berhenti di controller (Pod tetap HTTP),
-   self-signed cert cukup. Port 443 controller = NodePort `32024`, **NAT CHR-nya belum dibuat**.
-2. **Gambar alur lengkap** sebagai sintesis: laptop → CHR (dst-nat + hairpin src-nat) → NodePort
-   worker-2 → kube-proxy → Pod controller di worker → ClusterIP Service → Pod aplikasi. User sudah
-   melihat tiap potongannya terpisah; menyatukannya jadi satu gambar adalah pengujian pemahaman
-   terbaik.
-3. Ambil checkpoint di atas → tandai Modul 7 ✅ → lanjut Modul 8 (Capstone).
+### ✅ Modul 7 (lanjutan) — TLS Ingress + checkpoint LULUS (2026-08-19, cluster `kubeadm-lab`)
+
+**TLS termination dibuktikan hitam-putih.** Prediksi user ("Pod menerima HTTPS") **salah**, dan
+salahnya justru yang bikin paham. Satu output `curl -kv` memuat dua baris berjauhan:
+`> GET / HTTP/2` (client→controller, TLSv1.3) vs `GET / HTTP/1.1` (yang diterima Pod, polos).
+Pod `whoami` tidak punya cert dan tidak pernah handshake — `tls-secret` hanya dibaca controller,
+tidak pernah di-mount ke Pod. Kata **`terminates`** di `kubectl describe` itu harfiah.
+- Justru **karena** enkripsi sudah dilepas, controller wajib menitipkan `X-Forwarded-Proto: https`
+  + `X-Forwarded-Port: 443` + `X-Scheme`. Aplikasi tidak punya cara lain untuk tahu.
+  Production: framework harus dikonfigurasi percaya header itu (`SECURE_PROXY_SSL_HEADER` /
+  `force_ssl` / `forward-headers-strategy`) — kalau tidak, URL absolut jadi `http://` → redirect
+  loop. Dan header itu **hanya boleh dipercaya dari proxy sendiri**: kalau Pod bisa dihubungi
+  langsung (NodePort nempel = pintu belakang), siapa pun bisa memalsukannya.
+- `ALPN: server accepted h2` tapi ke backend HTTP/1.1 → controller **menerjemahkan protokol**,
+  bukti tambahan dia proxy L7 sungguhan. `strict-transport-security` juga bukan dari `whoami` —
+  ingress-nginx menyisipkan HSTS otomatis begitu TLS aktif.
+- `X-Forwarded-For: 172.20.2.0` **bukan** IP client asli (curl dari `127.0.0.1` di node) — sudah
+  ter-SNAT `KUBE-MARK-MASQ` sebelum controller melihatnya. `X-Forwarded-For` cuma seakurat apa
+  yang dilihat controller; menyambung langsung ke `externalTrafficPolicy: Local`.
+- Cert self-signed via `openssl req -x509` + `kubectl create secret tls`, key disimpan di
+  `~/ai-ops/workspace/tls/` (**gitignored** — repo ini fork publik). Uji tanpa DNS:
+  `curl -kv --resolve secure.local:32024:127.0.0.1` — `--resolve` (bukan `-H "Host:"`) karena
+  hostname juga dipakai di handshake TLS (SNI), bukan cuma header.
+
+**Pelajaran metodologi terbesar sesi ini: validasi ≠ verifikasi.** Ingress pertama di-apply
+**tanpa `spec.tls`** sama sekali (cuma namanya `whoami-tls`), dan `--dry-run=server` bilang
+`created`. Lolos, karena `spec.tls` itu **opsional** — API server memvalidasi *skema*, bukan
+*maksud*. Ketahuan hanya dari kolom `PORTS` yang masih `80`, identik dengan Ingress non-TLS.
+Ini pola kegagalan yang **ketiga kali** dialami user dalam bentuk berbeda: `ingressClassName`
+hilang (diabaikan, bukan ditolak) → LoadBalancer `<pending>` (valid di etcd, tak ada yang
+mengurus) → sekarang `spec.tls` hilang. Satu pola: **objek valid ≠ objek bekerja**. Refleks:
+jangan berhenti di `created`, cari **bukti positif** fitur menyala.
+
+**Perjuangan YAML `spec.tls` (4 iterasi) — bahan ajar yang bagus:**
+- Kesalahan #1: `tls: tls-secret` disisipkan **di tengah**, antara `rules:` dan item `- host:`.
+  Editor menandai baris `- host:` **merah padahal bukan itu yang salah** — parser menyimpulkan
+  `rules` selesai (null), lalu `- host:` jadi item yang menempel pada kunci `tls` yang sudah
+  berisi string. Pelajaran generik, sama semangatnya dengan `ImagePullBackOff`: **baris yang
+  ditandai error bukan baris yang salah — naik ke atas.**
+- Kesalahan #2: `- tls: tls-secret` sebagai item list langsung di dalam `spec` (mapping) → ilegal.
+  Tanda `-` hanya boleh jadi *nilai* sebuah kunci, tidak berdampingan dengan kunci sejajar.
+- Kesalahan #3: `tls:` → `- tls-secret` (string telanjang), padahal `[]TLS` di `explain` berarti
+  list **of objects** — item harus punya field bernama, seperti `rules` yang sudah ditulis benar.
+- Bentuk final: `tls:` → `- hosts:` (list, plural karena satu cert bisa melayani banyak hostname
+  via SAN/wildcard → dipilih controller lewat **SNI**) → `secretName:` sejajar `hosts`. Dua level
+  list bersarang; `-` di `- secure.local` milik `hosts`, `-` di `- hosts:` milik `tls`.
+- `tls.hosts` harus cocok dengan `rules.host`, kalau tidak cert disajikan untuk hostname yang
+  tak pernah dirutekan — "valid tapi tak berguna" lagi.
+- Kebiasaan yang ditegakkan: `--dry-run=client` dulu (nangkap sintaks lokal dalam sedetik),
+  baru `--dry-run=server`, baru apply.
+
+**Bukti patch in-place (lagi):** setelah `spec.tls` ditambahkan, `AGE` tetap `5h51m` (bukan reset)
+→ objek **di-patch**, bukan diganti. Konsisten dengan temuan Service di sesi sebelumnya.
+`Address` yang tadinya kosong ikut terisi, dan Events `Sync (x3)` = controller reload tiap spec
+berubah. Kolom `PORTS` → **`80, 443`**: kolom itu mencerminkan **`spec.tls` objek ini**, bukan
+kemampuan controller — controller sudah listen 443 (NodePort 32024) sejak 4 hari sebelumnya.
+
+**Gambar alur end-to-end (Tugas 7.5).** Kerangka user benar (laptop → CHR → NodePort →
+controller → Pod, plus ingat hairpin), dengan dua koreksi: (1) TLS dilepas **di controller**,
+bukan "dibawa ke Pod lalu dilepas Pod"; (2) NodePort bisa diakses dari node mana pun **bukan
+karena ClusterIP**, tapi karena rule `KUBE-NODEPORTS --dport 32024` ditulis **tanpa `-d`** —
+node = pintu masuk, bukan penyedia. Sintesis final: **IP/port berubah di 3 tempat** (CHR dst+src
+nat → netfilter node DNAT ke Pod controller lintas-node via flannel → controller ke ClusterIP ke
+Pod app), **protokol berubah cuma di 1 tempat** (controller). Hop lain memindahkan paket tanpa
+membacanya — itulah beda L4 vs L7, dan alasan `Host:`-based routing mustahil di Service. Jalan
+balik tidak butuh rule baru (conntrack membalik tiap NAT); hairpin src-nat di CHR wajib supaya
+balasan tidak keluar lewat default route node → asymmetric routing.
+
+**Hasil checkpoint — 4 pertanyaan, 2 perlu koreksi:**
+- (1) CCM ❌→✅ — user jawab "tidak ada load balancer dari luar seperti di EKS". Konsep dekat tapi
+  salah sasaran: yang hilang adalah **cloud-controller-manager**, komponen *di dalam* cluster yang
+  meminta LB ke provider. Bukti bahwa bukan soal ketersediaan LB: kubeadm di EC2 tanpa CCM tetap
+  `<pending>`; MetalLB di bare-metal tanpa cloud bisa memberi EXTERNAL-IP asli.
+- (2) ClusterIP⊂NodePort⊂LoadBalancer ❌ **paling penting** — user menjawab "LoadBalancer pakai
+  Ingress yang di depannya". Dikoreksi: LoadBalancer itu `type` pada **Service** (L4), Ingress itu
+  **kind objek terpisah** (L7); tidak ada yang "memakai" yang lain. Yang benar: **bertumpuk** —
+  NodePort = ClusterIP + port di tiap node; LoadBalancer = NodePort + permintaan LB eksternal.
+  `31032` muncul bukan karena LB punya fitur port, tapi karena **LB mengandung NodePort**
+  (LB eksternal butuh target untuk di-forward). Konsekuensi: `type: LoadBalancer` **tak bisa**
+  tanpa NodePort → selalu ada pintu belakang di tiap node yang melewati LB.
+- (3) hardcode `nodePort` ❌ **terbalik** — user bilang hardcode itu *aman* untuk banyak tim karena
+  "tidak akan berubah". Justru sebaliknya: NodePort itu **alokasi** dari 30000–32767 dan
+  pengalokasi cuma satu (API server). Tabrakan → yang apply belakangan **ditolak**
+  (`provided port is already allocated`). Ditolak itu kabar baik, tapi error muncul di CI tim B
+  sementara penyebabnya di namespace tim A yang tak terlihat olehnya. Pin justru **benar** kalau
+  ada sesuatu **di luar cluster** yang bergantung pada nomor itu — persis kasus rule CHR
+  `20932`–`20934` → `31032`: tanpa pin, recreate Service memberi nomor baru dan rule CHR menunjuk
+  port mati, gejalanya **timeout** bukan error jelas. Aturan: lab → pin + dokumentasikan;
+  cluster produksi bersama → jangan pin, dan jangan pakai NodePort untuk production.
+- (4) 3 skenario expose ✅ **kuat** — (a) ClusterIP, (b) NodePort, (c) `ClusterIP → Ingress
+  multihost → LoadBalancer`. Urutan berpikir (c) sudah pola production yang benar: satu LB
+  berbayar untuk semua domain (bukan satu per aplikasi) — alasan utama Ingress ada. Koreksi kecil:
+  LoadBalancer melekat pada Service **ingress controller**, bukan pada Service aplikasi.
+
+**⏭️ Berikutnya — Modul 8 (Capstone):** deploy production-style dari nol + drill troubleshooting.
+Uji ulang singkat di awal sesi: **hubungan bertumpuk ClusterIP⊂NodePort⊂LoadBalancer** dan
+**kapan pin `nodePort` aman vs bahaya** (dua ini baru dikoreksi, belum diuji tanpa catatan).
 
 Topik tambahan yang diminati user (di luar silabus, relevan interview): Gateway API sebagai
 penerus Ingress, `pathType` lengkap + aturan prioritas, dan bedah `nginx.conf` yang dihasilkan
@@ -471,6 +555,18 @@ Ditambahkan/berubah di sesi Modul 7 — **verifikasi ini dulu kalau kembali ke c
   `ingressClassName: nginx`.
 - Aktif di namespace `learning`: Ingress `nginx-demo` (host `example.com` → `nginx-demo:8080`) dan
   Ingress `nginx-multihost` (`whoami.local` → `whoami:80`, `podinfo.local` → `podinfo:80`).
+- **Ditambahkan sesi 2026-08-19 (TLS):** Ingress **`whoami-tls`** (`secure.local` → `whoami:80`,
+  `spec.tls` → Secret `tls-secret`, `PORTS 80, 443`) + Secret **`tls-secret`**
+  (`kubernetes.io/tls`, self-signed `CN=secure.local`, berlaku s/d 2027-08-19). Manifest ada di
+  repo (`ingress/ingress-tls.yaml`); **cert+key-nya TIDAK di repo** — hanya di
+  `~/ai-ops/workspace/tls/` yang gitignored. Kalau pindah mesin, generate ulang cert + Secret.
+  Dibiarkan aktif sebagai referensi; aman, tidak berebut objek dengan modul lain.
+- ⚠️ **Utang NAT masih ada:** rule CHR untuk HTTPS ingress (NodePort **32024**) **belum dibuat** —
+  pengujian TLS sesi ini dilakukan dari **dalam node** (`curl --resolve …:127.0.0.1`), bukan dari
+  laptop. Kalau mau akses dari WSL: tambah `20881`→`10.151.74.241:32024`
+  (comment `ingress-nginx-https`), lalu
+  `curl -kv --resolve secure.local:20881:<IP_PUBLIK_CHR> https://secure.local:20881/`.
+  Catatan: port publik wajib di rentang **20000–20999** (satu-satunya yang dibuka SG Aliyun).
 - Service `nginx-demo` sekarang **`type: LoadBalancer`** (`EXTERNAL-IP` `<pending>` permanen — tidak
   ada CCM, dibiarkan sebagai bahan ajar), NodePort **31032**, `externalTrafficPolicy` sudah
   dikembalikan ke `Cluster`. ⚠️ `service/service-loadbalancer.yaml` **tidak** mencantumkan
